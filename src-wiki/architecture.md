@@ -11,9 +11,12 @@ covers how the pieces fit.
   out of scope until BAM/BAI is solid.
 - File work runs off the render thread because HPC network filesystems (Lustre, GPFS) have
   random-access latency long enough to stall drawing.
-- Apus bounds thread use on shared HPC login nodes: one shared I/O worker, plus one scan worker
-  per loaded BAM so local-area scans don't hold up other file work. Keep BGZF decompression on the
-  worker that runs the query, and avoid APIs that start a Rayon pool.
+- Apus bounds thread use on shared HPC login nodes. BAM reads use two workers however many BAMs
+  are listed: the shared I/O worker fetches pileup reads, and the active BAM's local-area source
+  owns one scan worker so scans don't hold up other file work. Listed BAMs open no worker until
+  switched to, and a switch replaces the scan worker. The reference and search each own one more.
+  Keep BGZF decompression on the worker that runs the query, and avoid APIs that start a Rayon
+  pool.
 - `apus-desktop/` is a separate workspace member (`default-members = ["."]`) using direct `wgpu` +
   Slug rendering; keep graphics dependencies out of root `Cargo.toml` and keep `crossterm` /
   `ratatui/crossterm` behind the default `terminal` feature so `apus-desktop` builds without them.
