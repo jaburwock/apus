@@ -1,0 +1,168 @@
+name: Build release binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag for a draft prerelease (leave blank to build only)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  RUSTUP_TOOLCHAIN: '1.100.0'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            tui_target: x86_64-unknown-linux-musl
+            desktop_target: x86_64-unknown-linux-gnu
+          - platform: windows-x64
+            runner: windows-2025
+            tui_target: x86_64-pc-windows-msvc
+            desktop_target: x86_64-pc-windows-msvc
+          - platform: macos-arm64
+            runner: macos-15
+            tui_target: aarch64-apple-darwin
+            desktop_target: aarch64-apple-darwin
+          - platform: macos-x64
+            runner: macos-15-intel
+            tui_target: x86_64-apple-darwin
+            desktop_target: x86_64-apple-darwin
+    defaults:
+      run:
+        shell: bash
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      TUI_TARGET: ${{ matrix.tui_target }}
+      DESKTOP_TARGET: ${{ matrix.desktop_target }}
+      EXE_SUFFIX: ${{ startsWith(matrix.platform, 'windows-') && '.exe' || '' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target "$TUI_TARGET"
+          rustc --version
+      - name: Build TUI
+        run: cargo build --locked --release -p apus --bin apus --target "$TUI_TARGET"
+      - name: Build desktop
+        run: cargo build --locked --release -p apus-desktop --bin apus-desktop --target "$DESKTOP_TARGET"
+      - name: Stage and smoke-test executables
+        run: |
+          checksum=(sha256sum)
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            checksum=(shasum -a 256)
+          fi
+
+          mkdir -p target/release-dist/metadata
+          tui="apus-$PLATFORM$EXE_SUFFIX"
+          desktop="apus-desktop-$PLATFORM$EXE_SUFFIX"
+          install -m 0755 "target/$TUI_TARGET/release/apus$EXE_SUFFIX" "target/release-dist/$tui"
+          install -m 0755 "target/$DESKTOP_TARGET/release/apus-desktop$EXE_SUFFIX" "target/release-dist/$desktop"
+          cp LICENSE.md apus-desktop/src/shaders/Slug-MIT-LICENSE.txt target/release-dist/metadata/
+          cp apus-desktop/assets/fonts/LICENSE target/release-dist/metadata/Fira-Code-OFL.txt
+          cd target/release-dist
+          "./$tui" --help
+          "./$desktop" --help
+          "${checksum[@]}" "$tui" "$desktop" > "metadata/SHA256SUMS-$PLATFORM.txt"
+      - name: Upload TUI executable
+        uses: actions/upload-artifact@v7
+        with:
+          # Match the filename so upload-artifact can find it on a rerun with overwrite enabled.
+          name: apus-${{ env.PLATFORM }}${{ env.EXE_SUFFIX }}
+          path: target/release-dist/apus-${{ env.PLATFORM }}${{ env.EXE_SUFFIX }}
+          archive: false
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload desktop executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: apus-desktop-${{ env.PLATFORM }}${{ env.EXE_SUFFIX }}
+          path: target/release-dist/apus-desktop-${{ env.PLATFORM }}${{ env.EXE_SUFFIX }}
+          archive: false
+          if-no-files-found: error
+          overwrite: true
+      - name: Upload checksums and notices
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ env.PLATFORM }}-checksums-and-licenses
+          path: target/release-dist/metadata/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  draft-release:
+    name: Create draft prerelease
+    if: inputs.release_tag != ''
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: binary-draft-${{ inputs.release_tag }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: apus-*
+          path: release-dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*-checksums-and-licenses
+          path: release-dist/metadata
+      - name: Verify assets and create draft
+        shell: bash
+        working-directory: release-dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          shopt -s nullglob
+          binaries=(apus-*)
+          checksums=(metadata/release-*/SHA256SUMS-*.txt)
+          licenses=(metadata/release-linux-x64-checksums-and-licenses/{LICENSE.md,Slug-MIT-LICENSE.txt,Fira-Code-OFL.txt})
+          if (( ${#binaries[@]} != 8 || ${#checksums[@]} != 4 )); then
+            echo 'Expected eight executables and four checksum files.' >&2
+            exit 1
+          fi
+          sha256sum --check --strict -- "${checksums[@]}"
+
+          tag_ref="refs/tags/$RELEASE_TAG"
+          git check-ref-format "$tag_ref" || { echo 'Invalid release tag.' >&2; exit 1; }
+          encoded_tag=$(jq -rn --arg tag "$RELEASE_TAG" '$tag | @uri')
+          matching_refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$encoded_tag" --jq '.[].ref')
+          if grep -Fxq -- "$tag_ref" <<< "$matching_refs"; then
+            tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/tags/$encoded_tag" --jq .sha)
+            if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+              echo "Tag $RELEASE_TAG points to $tag_commit. This run built $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
+
+          existing_release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -r --arg tag "$RELEASE_TAG" '.[] | select(.tag_name == $tag) | .html_url')
+          if [[ -n "$existing_release" ]]; then
+            printf 'A release or draft already uses this tag:\n%s\n' "$existing_release" >&2
+            exit 1
+          fi
+
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          notes="Early alpha preview built from \`$GITHUB_SHA\`. [Build run]($run_url)."
+          notes+=$'\n\n'
+          notes+='On macOS and Linux, run `chmod +x FILE` on the downloaded executable.'
+          draft_url=$(gh release create --repo "$GITHUB_REPOSITORY" \
+            --draft --prerelease --target "$GITHUB_SHA" --title "Apus $RELEASE_TAG" \
+            --notes "$notes" -- "$RELEASE_TAG" "${binaries[@]}" "${checksums[@]}" "${licenses[@]}")
+          printf '[Open the draft prerelease](%s)\n' "$draft_url" >> "$GITHUB_STEP_SUMMARY"

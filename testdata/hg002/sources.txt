@@ -1,0 +1,4 @@
+https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz
+https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/genes/hg38.ncbiRefSeq.gtf.gz
+https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/v5.0q/HG002_GRCh38_v5.0q_stvar.vcf.gz
+https://ont-basemod-benchmark-data.s3.amazonaws.com/Analysis/modbam/mammals/human/HG002_public_5kHz_sup_v5.2r2_5mC.bam

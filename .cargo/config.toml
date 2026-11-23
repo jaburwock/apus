@@ -1,0 +1,62 @@
+[alias]
+# `cargo ex-*` — user-facing rendering examples, not tests. Each launches the
+# real binary against `testdata/` fixtures so a human can look at the
+# screen and confirm rendering/behaviour is correct; nothing is asserted and
+# nothing passes or fails. Named after the *fixture*, not the feature, since
+# one fixture demonstrates several behaviours at once (`tiny.bam` covers CIGAR
+# ops, mismatches and indels together).
+#
+# Deliberately cargo aliases rather than real `examples/` binaries: each such
+# example would be a near-duplicate `main.rs` wrapper existing only to hardcode
+# CLI args, and would pressure `lib.rs`'s deliberately minimal `pub` surface to
+# grow. The `ex-` prefix borrows the vocabulary without the machinery — don't
+# "fix" these by converting them to `examples/`.
+ex-tiny = "run -- testdata/reference/hs1_subset.fa testdata/bam/tiny.bam"
+ex-medium = "run -- testdata/reference/hs1_subset.fa testdata/bam/medium.bam"
+# GTF only: no `.fa` and no `.bam`, so the app opens on the bundled `hs1`
+# fallback reference with an empty pileup. Isolates the full-scale locus index
+# — `/` search over every RefSeq entry, and the features track — from anything
+# a reference or read fixture would put on screen. Fetch with `bash testdata/fetch.sh DATA_DIR gtf`.
+ex-fullgtf = "run -- testdata/large/hs1.ncbiRefSeq.gtf.gz"
+
+# Everything at once, at real scale: the full T2T reference, the full RefSeq
+# GTF, and medium.bam's reads. Fetch with `bash testdata/fetch.sh DATA_DIR ref gtf`.
+# The 3 GB indexed FASTA exercises the reference worker's chunk cache at full scale.
+ex-full = "run -- testdata/large/hs1.fa testdata/large/hs1.ncbiRefSeq.gtf.gz testdata/bam/medium.bam"
+
+# The VCF tab against real annotated data: ClinVar remapped to T2T-CHM13v2,
+# with ClinVar's own INFO vocabulary. No `.fa`, so the app opens on the bundled
+# `hs1` fallback: this is for looking at the variant table, and pairing it with
+# the 3GB reference would buy nothing the genome tab isn't already covered for.
+# The VCF being the only file named also means startup focuses the VCF tab,
+# landing on the table. Note the VCF's contigs are bare Ensembl names
+# (`1`, `2`, …) — see the matching-references convention in CONTRIBUTING.md.
+#
+# This one runs the committed `testdata/vcf/` subset, so it works on a fresh
+# clone: every 57th record of the full file, 50,283 of 2,866,168, keeping all 24
+# contigs. Debug is fine at that size — the `--release` argument below is about
+# ~3M records, and this is ~1/57th of that scan.
+ex-vcf-clinvar = "run -- testdata/vcf/clinvar_subset.vcf.gz"
+
+# The same data at full scale, about 3M records. Fetch with `bash testdata/fetch.sh DATA_DIR clinvar`.
+# Use it to check how the table behaves at real size.
+#
+# Built `--release`: at ~3M records the index scan is 5–6 seconds under a debug
+# build against ~1s optimised, and this alias exists for judging scroll feel and
+# load latency — which debug misreports.
+ex-vcf-clinvar-full = "run --release -- testdata/large/clinvar_20240624_GCA_009914755.4.vcf.gz"
+
+ex-hg002 = "run --release -- testdata/hg002/demo/hg38-demo.fa.gz testdata/hg002/demo/HG002_DEL2477_INS975.bam testdata/hg002/demo/HG002_DEL2477_INS975.vcf.gz"
+ex-hg002-multisample = "run --release -- testdata/hg002/multisample/hg38-multisample.fa.gz testdata/hg002/multisample/del2477.bam testdata/hg002/multisample/ins975.bam testdata/hg002/multisample/ins55.bam testdata/hg002/multisample/ins55_rep.bam testdata/hg002/multisample/hg002-multisample.vcf.gz"
+# The whole 133 GiB ONT BAM, for judging load, scroll and jump feel at real depth. Paired with the
+# sampled-indel VCF, whose sites all have ≥5× depth, so every row is a jump target with reads.
+# Fetch with `testdata/hg002/fetch.sh DATA_DIR --bam`, then preprocess and subset (testdata/README.md).
+ex-hg002-full = "run --release -- testdata/large/hg002/hg38.fa testdata/large/hg002/HG002_public_5kHz_sup_v5.2r2_5mC.bam testdata/large/hg002/HG002_GRCh38_v5.0q_stvar.ncbiRefSeq-cds-overlap.sampled-indels.min5x.vcf.gz"
+ex-hg002-full-gtf = "run --release -- testdata/large/hg002/hg38.fa testdata/large/hg002/hg38.ncbiRefSeq.gtf.gz testdata/large/hg002/HG002_public_5kHz_sup_v5.2r2_5mC.bam testdata/large/hg002/HG002_GRCh38_v5.0q_stvar.ncbiRefSeq-cds-overlap.sampled-indels.min5x.vcf.gz"
+prof-hg002 = "run --profile profiling --features profiling --bin prof_genome -- --bam testdata/large/hg002/HG002_public_5kHz_sup_v5.2r2_5mC.bam --fasta testdata/large/hg002/hg38.fa"
+
+# Cross-compiles a standalone Linux binary from macOS for HPC deployment, via
+# `cargo-zigbuild` (needs `zig` and `cargo install cargo-zigbuild` locally —
+# neither is a project dependency). musl target so the result is fully static
+# and portable across HPC nodes without a matching glibc.
+build-linux = "zigbuild --release --target x86_64-unknown-linux-musl"

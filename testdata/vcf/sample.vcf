@@ -1,0 +1,16 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=1000000>
+##contig=<ID=chr2,length=500000>
+##INFO=<ID=DP,Number=1,Type=Integer,Description="Total depth">
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">
+##INFO=<ID=DB,Number=0,Type=Flag,Description="Present in dbSNP">
+##INFO=<ID=MC,Number=.,Type=String,Description="Molecular consequence as Sequence Ontology ID|term">
+##INFO=<ID=NOTE,Number=1,Type=String,Description="Free text long enough to exercise INFO truncation">
+##INFO=<ID=UNUSED,Number=1,Type=String,Description="Declared but carried by no record, as ClinVar declares many">
+##FILTER=<ID=LowQual,Description="Low quality">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	100	rs1	A	G	50	PASS	DP=30;AF=0.5;DB;MC=SO:0001583|missense_variant
+chr1	150	.	C	T	.	.	DP=12
+chr1	175	rs2	G	A,C	99	PASS	DP=45;AF=0.25,0.1;MC=SO:0001819|synonymous_variant
+chr1	900	rs3	T	TA	20	LowQual	DP=8;NOTE=a_deliberately_long_value_padded_out_so_that_the_rendered_INFO_blob_runs_past_the_display_limit_and_must_be_cut_somewhere_sensible
+chr2	200	.	G	C	75	PASS	DP=22;DB

@@ -1,0 +1,87 @@
+[workspace]
+members = [".", "apus-desktop"]
+exclude = ["apus-web"]
+default-members = ["."]
+
+[package]
+name = "apus"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+# `src/bin/` also holds the `gen_tiny_bam`, `gen_medium_bam`, and `bam_to_sam` utilities, so a bare
+# `cargo run` is ambiguous without this. The viewer is the product; the other three
+# stay reachable via `cargo run --bin <name>`.
+default-run = "apus"
+
+# Debug defaults to 256 codegen units. Each rebuild under a new crate hash writes a
+# fresh set of per-unit `.rcgu.o` objects into `target/debug/deps` and never reclaims
+# the old set, so file count grows linearly with ordinary edit-build-test cycles —
+# the path to the 748k files CONTRIBUTING.md records. Fewer units, fewer objects stranded
+# per cycle: against the 256 default, `cargo build` goes +888 → +96 and
+# `cargo nextest run` +586 → +52. It costs no build time at this crate size — it saves
+# it, incremental `cargo build` running 29% faster (0.89s → 0.63s), because the
+# per-unit overhead outweighs the parallelism the extra units buy. The setting only
+# parallelises *within* one crate, and dependencies dominate a clean build, so it
+# constrains only the final `apus` compile.
+#
+# Swept 256/64/32/24/16/8: build time is flat within noise from 32 down, and 8 is the
+# first step to cost anything (test 9.40s → 9.55s, the test binary being the largest
+# single compile). 16 is the floor before that, and stays above this machine's core
+# count. Nothing here needs a power of two — 24 measured exactly between its
+# neighbours; `codegen-units` bounds how rustc partitions the crate, and it merges
+# units to balance size, which is why the file counts don't scale by the exact ratio.
+# Release is deliberately untouched: there codegen-units sets optimisation quality,
+# where this tradeoff does not apply.
+[profile.dev]
+codegen-units = 16
+
+[profile.test]
+codegen-units = 16
+
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+
+[features]
+default = ["terminal"]
+terminal = ["dep:crossterm", "ratatui/crossterm"]
+testgen = ["dep:rand", "dep:uuid"]
+profiling = []
+resident-demo = []
+
+[[bin]]
+name = "apus"
+path = "src/main.rs"
+required-features = ["terminal"]
+
+[[bin]]
+name = "gen_tiny_bam"
+required-features = ["testgen"]
+
+[[bin]]
+name = "gen_medium_bam"
+required-features = ["testgen"]
+
+[[bin]]
+name = "prof_genome"
+required-features = ["profiling"]
+
+[dependencies]
+clap = { version = "4.6.5", features = ["derive"] }
+crossterm = { version = "0.29.0", optional = true }
+flate2 = "1"
+noodles = { version = "0.112.0", features = ["core", "fasta", "bam", "sam", "csi", "bgzf", "vcf", "tabix"] }
+nucleo-matcher = "0.3.1"
+rand = { version = "0.10.2", optional = true }
+ratatui = { version = "0.30.2", default-features = false, features = ["std", "all-widgets", "layout-cache", "macros", "underline-color"] }
+uuid = { version = "1.24.0", features = ["v4"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sysinfo = "0.39.6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1.1"
+
+[dev-dependencies]
+rand = "0.10.2"
+uuid = { version = "1.24.0", features = ["v4"] }

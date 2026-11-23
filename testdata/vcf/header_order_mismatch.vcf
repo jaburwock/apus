@@ -1,0 +1,17 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=1000000>
+##contig=<ID=chr7,length=800000>
+##contig=<ID=chrX,length=700000>
+##contig=<ID=chr9,length=600000>
+##contig=<ID=chr8,length=500000>
+##contig=<ID=chr11,length=400000>
+##contig=<ID=chr10,length=300000>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+chr1	100	.	A	G	50	PASS	DP=30
+chr7	200	.	C	T	50	PASS	DP=30
+chr8	300	.	G	A	50	PASS	DP=30
+chr9	400	.	T	C	50	PASS	DP=30
+chr10	500	.	A	T	50	PASS	DP=30
+chr10	900	.	G	C	50	PASS	DP=30
+chr11	600	.	C	G	50	PASS	DP=30
+chrX	700	.	T	A	50	PASS	DP=30

@@ -1,0 +1,27 @@
+HG002 multisample example data · 2026-11-22
+
+NIST Genome in a Bottle HG002 GRCh38 v5.0q structural variant benchmark.
+On 2026-11-22 Apus selected the 2,477 bp deletion at chr1:108190703, the
+975 bp insertion at chr1:152304195 and the 55 bp insertion at chr2:130963905
+from the RefSeq CDS-overlap subset annotated with ONT BAM depth and sampled
+by allele at ≥5× depth. Each mock sample carries the unphased HG002 benchmark
+genotype for the locus covered by its BAM.
+The mock samples ins55 and ins55_rep use the same chr2 alignments.
+Olson et al. https://doi.org/10.64898/2026.09.23.752440
+https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/v5.0q/
+See ../NIST-DATA-NOTICE.txt for the benchmark data terms.
+
+CSIR-Centre for Cellular and Molecular Biology, ONT Methylation Benchmarking
+Datasets, source verified on 2026-11-23. Each BAM retains the
+alignments overlapping the deletion span or the corresponding insertion
+anchor. Read-group sample names match the BAM stems. The dataset license
+is in ../demo/ONT-MIT-LICENSE.txt.
+https://registry.opendata.aws/ont_basemod_data/
+https://ont-basemod-benchmark-data.s3.amazonaws.com/Analysis/modbam/mammals/human/HG002_public_5kHz_sup_v5.2r2_5mC.bam
+Kulkarni et al. https://doi.org/10.1101/2024.11.09.622763 (preprint)
+Kulkarni et al. https://doi.org/10.1038/s41467-026-75183-6 (published)
+
+UCSC hg38 reference. The 1-based inclusive windows chr1:108140703–108243180,
+chr1:152254195–152354195 and chr2:130913905–131013905 retain the original
+sequence. The remaining chr1 and chr2 positions are masked with N.
+https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/

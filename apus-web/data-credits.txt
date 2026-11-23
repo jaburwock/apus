@@ -1,0 +1,21 @@
+HG002 web demo data
+
+NIST Genome in a Bottle HG002 GRCh38 v5.0q structural variant benchmark.
+On 2026-11-21 Apus bundled the 2,477 bp deletion at chr1:108,190,703 and the
+975 bp insertion at chr1:152,304,195 from the RefSeq CDS-overlap subset
+annotated with ONT BAM depth and sampled by allele at ≥5× depth.
+Olson et al. https://doi.org/10.64898/2026.09.23.752440
+https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/v5.0q/
+See NIST-DATA-NOTICE.txt for the benchmark data terms.
+
+CSIR-Centre for Cellular and Molecular Biology, ONT Methylation Benchmarking
+Datasets. The BAM subset contains all 530 alignments returned by an indexed
+query over the two reference slices below. See ONT-MIT-LICENSE.txt.
+https://registry.opendata.aws/ont_basemod_data/
+https://ont-basemod-benchmark-data.s3.amazonaws.com/Analysis/modbam/mammals/human/HG002_public_5kHz_sup_v5.2r2_5mC.bam
+Kulkarni et al. https://doi.org/10.1101/2024.11.09.622763 (preprint)
+Kulkarni et al. https://doi.org/10.1038/s41467-026-75183-6 (published)
+
+UCSC hg38 reference. The demo contains two 1-based inclusive chr1 slices
+extracted on 2026-11-21, 108,140,703–108,243,180 and 152,254,195–152,354,195.
+https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/

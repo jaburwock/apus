@@ -1,0 +1,8 @@
+/target
+/.pixi
+/testdata/large/
+*.apuscache
+.DS_Store
+/data
+# Saved by the palette editor.
+/palettes

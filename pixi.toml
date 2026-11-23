@@ -1,0 +1,16 @@
+# Install Rust and Cargo separately with rustup.
+[workspace]
+name = "apus"
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64", "osx-arm64", "osx-64"]
+
+[dependencies]
+samtools = "*"
+htslib = "*"
+curl = "*"
+cargo-nextest = "*"
+bcftools = "*"
+
+[tasks]
+fetch = "bash testdata/fetch.sh"
+test = "cargo nextest run"
