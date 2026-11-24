@@ -52,7 +52,7 @@ ex-hg002-multisample = "run --release -- testdata/hg002/multisample/hg38-multisa
 # sampled-indel VCF, whose sites all have ≥5× depth, so every row is a jump target with reads.
 # Fetch with `testdata/hg002/fetch.sh DATA_DIR --bam`, then preprocess and subset (testdata/README.md).
 ex-hg002-full = "run --release -- testdata/large/hg002/hg38.fa testdata/large/hg002/HG002_public_5kHz_sup_v5.2r2_5mC.bam testdata/large/hg002/HG002_GRCh38_v5.0q_stvar.ncbiRefSeq-cds-overlap.sampled-indels.min5x.vcf.gz"
-ex-hg002-full-gtf = "run --release -- testdata/large/hg002/hg38.fa testdata/large/hg002/hg38.ncbiRefSeq.gtf.gz testdata/large/hg002/HG002_public_5kHz_sup_v5.2r2_5mC.bam testdata/large/hg002/HG002_GRCh38_v5.0q_stvar.ncbiRefSeq-cds-overlap.sampled-indels.min5x.vcf.gz"
+ex-hg002-full-gtf = "run --release -- testdata/large/hg002/hg38.fa testdata/large/hg002/hg38.ncbiRefSeq.gtf.gz testdata/large/hg002/HG002_public_5kHz_sup_v5.2r2_5mC.bam testdata/large/hg002/HG002_GRCh38_v5.0q_stvar.ncbiRefSeq-cds-overlap.with-depth.vcf.gz"
 prof-hg002 = "run --profile profiling --features profiling --bin prof_genome -- --bam testdata/large/hg002/HG002_public_5kHz_sup_v5.2r2_5mC.bam --fasta testdata/large/hg002/hg38.fa"
 
 # Cross-compiles a standalone Linux binary from macOS for HPC deployment, via

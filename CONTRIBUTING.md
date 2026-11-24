@@ -226,7 +226,7 @@ cargo ex-vcf-clinvar # rendering example: the variant table over the committed C
 cargo ex-vcf-clinvar-full # the same at full scale, needs fetch.sh DATA_DIR clinvar
 cargo ex-hg002       # rendering example: two HG002 SVs with bundled hg38 reference windows
 cargo ex-hg002-full  # the full 133 GiB HG002 BAM with the sampled-indel VCF, needs fetch.sh --bam
-cargo ex-hg002-full-gtf # the full HG002 example with hg38 RefSeq gene annotations
+cargo ex-hg002-full-gtf # the full HG002 BAM with the depth-annotated CDS-overlap VCF and hg38 RefSeq GTF
 cargo prof-hg002     # headless profiling runner against the full HG002 BAM
 cargo build-linux    # cross-compile a standalone Linux binary for HPC
 ```

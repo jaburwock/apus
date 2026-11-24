@@ -146,7 +146,8 @@ contains two insertions and two deletions per size bucket at ≥5× depth at VCF
 SHA-256 rank of the allele. Rerunning subsetting refreshes its outputs in the data directory.
 
 After fetching with `--bam`, `cargo ex-hg002-full` opens the full BAM with the sampled-indel VCF.
-`cargo ex-hg002-full-gtf` also loads the full hg38 RefSeq GTF from the same data directory.
+`cargo ex-hg002-full-gtf` opens the full BAM and hg38 RefSeq GTF with the depth-annotated CDS-overlap
+VCF (`*.with-depth.vcf.gz`) from the same data directory.
 
 The hg38 FASTA and NCBI RefSeq gene annotations come from UCSC. The GTF URL can track newer
 annotations. The sample was verified using `ncbiRefSeq.2022-10-28`.
