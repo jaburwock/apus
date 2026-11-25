@@ -1,9 +1,8 @@
 //! Thin Ratatui [`Backend`] adapter over [`CellGrid`].
 //!
-//! This is the sole module in `apus-desktop` that translates `ratatui::style::Color` and
-//! `Modifier`. Because Apus authors only `Color::Indexed(u8)` and paints the frame ground with
+//! Because Apus authors only `Color::Indexed(u8)` and paints the frame ground with
 //! `Surface::APP_BG()`, every cell is reduced at ingest to plain `u8` ANSI-256 foreground and
-//! background indices so the entire GPU renderer below stays `ratatui`-free.
+//! background indices so both CPU and GPU renderers below stay `ratatui`-free.
 
 use std::io;
 
@@ -12,8 +11,8 @@ use ratatui::buffer::Cell as RatatuiCell;
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 
-use crate::color::{FALLBACK_BG, FALLBACK_FG};
-use crate::grid::{Cell, CellFlags, CellGrid};
+use super::color::{FALLBACK_BG, FALLBACK_FG};
+use super::{Cell, CellFlags, CellGrid};
 
 /// Ratatui backend backed by an in-memory ANSI-256 [`CellGrid`].
 pub struct GridBackend {

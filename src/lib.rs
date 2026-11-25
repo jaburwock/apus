@@ -37,9 +37,12 @@ mod viewer;
 mod viewer_app;
 
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod capture;
 mod cli;
 #[cfg(feature = "resident-demo")]
 mod demo;
+pub mod grid;
 mod runtime;
 
 // wasm32-unknown-unknown has no standard-library clock.
@@ -52,7 +55,7 @@ pub use web_time::Instant;
 pub use demo::build_demo_app;
 
 pub use app::App;
-pub use cli::{Cli, FileArgs};
+pub use cli::{CaptureArgs, Cli, FileArgs};
 pub use input::{Key, Modifiers, MouseEvent, MouseKind};
 pub use notification::{Diagnostic, Severity};
 #[cfg(any(test, feature = "testgen"))]

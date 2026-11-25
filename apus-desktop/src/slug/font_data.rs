@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use apus::grid::{FIRA_CODE_BOLD, FIRA_CODE_REGULAR, FontMetrics, fallback_char};
 use ttf_parser::{Face, GlyphId};
 
 use super::bands::{BandTransform, make_bands};
@@ -42,44 +43,6 @@ pub struct GlyphRecord {
     pub empty: bool,
 }
 
-/// Metrics for a monospace font family in em units (y-up from baseline).
-#[derive(Debug, Clone, Copy)]
-pub struct FontMetrics {
-    pub ascent_em: f32,
-    pub descent_em: f32,
-    pub line_gap_em: f32,
-    pub advance_em: f32,
-}
-
-impl FontMetrics {
-    /// Cell geometry in physical pixels for a given em size (`size_px`).
-    ///
-    /// Width and height are rounded to integer pixels so every terminal cell lands on exact
-    /// physical pixel edges and adjacent block/box/background quads never seam.
-    pub fn cell_metrics(self, size_px: f32) -> CellMetrics {
-        let width_px = (self.advance_em * size_px).round().max(1.0);
-        let raw_line_height = (self.ascent_em - self.descent_em + self.line_gap_em) * size_px;
-        let height_px = raw_line_height.round().max(1.0);
-        let leading = (height_px - (self.ascent_em - self.descent_em) * size_px) * 0.5;
-        let baseline_px = (self.ascent_em * size_px + leading).round();
-        CellMetrics {
-            width_px,
-            height_px,
-            baseline_px,
-            size_px,
-        }
-    }
-}
-
-/// Pixel-snapped cell geometry derived from [`FontMetrics`] and an em size in physical pixels.
-#[derive(Debug, Clone, Copy)]
-pub struct CellMetrics {
-    pub width_px: f32,
-    pub height_px: f32,
-    pub baseline_px: f32,
-    pub size_px: f32,
-}
-
 /// Packed GPU buffers and codepoint lookup tables for Regular and Bold faces.
 pub struct FontData {
     pub metrics: FontMetrics,
@@ -95,11 +58,7 @@ pub struct FontData {
 impl FontData {
     /// Looks up the packed [`GlyphRecord`] for `ch` in Regular or Bold.
     pub fn glyph(&self, ch: char, bold: bool) -> &GlyphRecord {
-        // Fira Code lacks U+25B8 (`▸`, used in contig_selector.rs); map to `▶` (U+25B6).
-        let mapped = match ch {
-            '\u{25B8}' => '\u{25B6}',
-            other => other,
-        };
+        let mapped = fallback_char(ch);
         let table = if bold { &self.bold } else { &self.regular };
         let idx = table
             .get(&mapped)
@@ -211,10 +170,6 @@ fn pack_face(
     (lookup, fallback)
 }
 
-/// Embedded Fira Code Regular and Bold font bytes (SIL OFL 1.1).
-const FIRA_CODE_REGULAR: &[u8] = include_bytes!("../../assets/fonts/FiraCode-Regular.ttf");
-const FIRA_CODE_BOLD: &[u8] = include_bytes!("../../assets/fonts/FiraCode-Bold.ttf");
-
 /// Parses and packs the embedded Fira Code Regular and Bold faces into Slug textures.
 pub fn build_embedded_fonts() -> FontData {
     build_font_data(FIRA_CODE_REGULAR, FIRA_CODE_BOLD)
@@ -232,11 +187,12 @@ pub fn build_font_data(regular_bytes: &[u8], bold_bytes: &[u8]) -> FontData {
         .and_then(|gid| regular_face.glyph_hor_advance(gid))
         .unwrap_or(regular_face.units_per_em() * 3 / 5);
 
+    let upem = f32::from(regular_face.units_per_em());
     let metrics = FontMetrics {
-        ascent_em: f32::from(regular_face.ascender()) * regular_em,
-        descent_em: f32::from(regular_face.descender()) * regular_em,
-        line_gap_em: f32::from(regular_face.line_gap()) * regular_em,
-        advance_em: f32::from(advance_units) * regular_em,
+        ascent_em: f32::from(regular_face.ascender()) / upem,
+        descent_em: f32::from(regular_face.descender()) / upem,
+        line_gap_em: f32::from(regular_face.line_gap()) / upem,
+        advance_em: f32::from(advance_units) / upem,
     };
 
     let mut curve_texels = Vec::new();
@@ -274,6 +230,7 @@ mod tests {
     #[test]
     fn embedded_fira_code_packs_regular_and_bold_with_expected_ui_glyphs() {
         let data = build_embedded_fonts();
+        assert_eq!(data.metrics, apus::grid::FIRA_CODE_METRICS);
         assert!(data.glyph_count() > 2000, "expected Regular + Bold mapped glyphs");
         assert_eq!(data.curve_texels.len() % TEXTURE_WIDTH, 0);
         assert_eq!(data.band_texels.len() % TEXTURE_WIDTH, 0);

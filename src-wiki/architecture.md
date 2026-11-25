@@ -18,8 +18,13 @@ covers how the pieces fit.
   Keep BGZF decompression on the worker that runs the query, and avoid APIs that start a Rayon
   pool.
 - `apus-desktop/` is a separate workspace member (`default-members = ["."]`) using direct `wgpu` +
-  Slug rendering; keep graphics dependencies out of root `Cargo.toml` and keep `crossterm` /
-  `ratatui/crossterm` behind the default `terminal` feature so `apus-desktop` builds without them.
+  Slug rendering; keep graphics dependencies (`wgpu`, `winit`, `ttf-parser`) out of root
+  `Cargo.toml` and keep `crossterm` / `ratatui/crossterm` behind the default `terminal` feature so
+  `apus-desktop` builds without them. Shared cell grid types (`src/grid/`), embedded Fira Code font
+  bytes, and native-only CPU `--capture` (`src/capture/`, via `fontdue` + `png`) live in `apus` so
+  both `apus` and `apus-desktop` share the same CPU capture runner without pulling GPU dependencies
+  into `apus`. `apus-desktop --llvmcapture` keeps the Mesa `llvmpipe` Slug/CRT path for native
+  renderer testing and consumes the same `prepare_capture` grid and atomic `write_png` publisher.
 - The [WebGL2 demo runner](../apus-web/) builds outside the native workspace. It shares the
   desktop renderer and uses resident data sources. Its App starts without file workers.
 

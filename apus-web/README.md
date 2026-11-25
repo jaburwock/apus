@@ -27,7 +27,7 @@ inputs and samtools 1.25.
 The archive includes the [data credits](data-credits.txt), [ONT MIT license](ONT-MIT-LICENSE.txt)
 and [NIST data notice](../testdata/hg002/NIST-DATA-NOTICE.txt). The Pages build ships those files
 with the [Apus license](../LICENSE.md), [Slug MIT notice](../apus-desktop/src/shaders/Slug-MIT-LICENSE.txt)
-and [Fira Code OFL notice](../apus-desktop/assets/fonts/LICENSE).
+and [Fira Code OFL notice](../src/grid/fonts/LICENSE).
 
 ## GitHub Actions
 

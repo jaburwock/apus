@@ -3,7 +3,7 @@
 //! Everything below the thin Ratatui backend adapter deals solely in `u8` ANSI-256 indices.
 //! Indices 16–231 use the standard xterm 6×6×6 cube, 232–255 use the 24-step greyscale ramp,
 //! and 0–15 use a standard dark-terminal palette so user-selected overrides still resolve
-//! branchlessly via `LUT[idx as usize]`.
+//! branchlessly via `RGB_LUT[idx as usize]`.
 
 /// Standard dark-terminal RGB values for ANSI indices 0–15.
 const SYSTEM_16: [[u8; 3]; 16] = [
@@ -59,6 +59,9 @@ pub const FALLBACK_FG: u8 = 252;
 
 /// Fallback background index when a cell carries a non-indexed colour.
 pub const FALLBACK_BG: u8 = 234;
+
+/// Foreground opacity factor for [`super::CellFlags::DIM`].
+pub const DIM_ALPHA: f32 = 0.65;
 
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {

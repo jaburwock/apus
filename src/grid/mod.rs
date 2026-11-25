@@ -1,8 +1,20 @@
-//! Ratatui-free terminal cell grid using plain `u8` ANSI-256 colour indices.
+//! Ratatui-free terminal cell grid and shared pixel-snapped rendering primitives.
+//!
+//! Used by `apus`'s CPU headless capture, `apus-desktop`'s native GPU renderer, and `apus-web`'s
+//! WebGL2 canvas. Everything below [`GridBackend`] deals solely in `u8` ANSI-256 indices so both
+//! CPU and GPU renderers share colour resolution, cell metrics, and procedural glyph geometry.
 
-use crate::color::{FALLBACK_BG, FALLBACK_FG};
+pub mod backend;
+pub mod color;
+pub mod font;
+pub mod procedural;
 
-/// Style flags carried per cell into the GPU renderer.
+pub use backend::GridBackend;
+pub use font::{CellMetrics, FIRA_CODE_BOLD, FIRA_CODE_METRICS, FIRA_CODE_REGULAR, FontMetrics, fallback_char};
+
+use color::{FALLBACK_BG, FALLBACK_FG};
+
+/// Style flags carried per cell into CPU and GPU renderers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CellFlags(u8);
 

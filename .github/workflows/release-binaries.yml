@@ -72,10 +72,22 @@ jobs:
           install -m 0755 "target/$TUI_TARGET/release/apus$EXE_SUFFIX" "target/release-dist/$tui"
           install -m 0755 "target/$DESKTOP_TARGET/release/apus-desktop$EXE_SUFFIX" "target/release-dist/$desktop"
           cp LICENSE.md apus-desktop/src/shaders/Slug-MIT-LICENSE.txt target/release-dist/metadata/
-          cp apus-desktop/assets/fonts/LICENSE target/release-dist/metadata/Fira-Code-OFL.txt
+          cp src/grid/fonts/LICENSE target/release-dist/metadata/Fira-Code-OFL.txt
           cd target/release-dist
           "./$tui" --help
           "./$desktop" --help
+          mkdir -p ../release-smoke
+          for bin in "$tui" "$desktop"; do
+            "./$bin" --capture "../release-smoke/$bin.png" \
+              --cmd ':focustab GenomeViewer' \
+              --cmd ':set activecontig chr1' \
+              --cmd ':goto 108190703,' \
+              ../../testdata/hg002/demo/hg38-demo.fa.gz \
+              ../../testdata/hg002/demo/HG002_DEL2477_INS975.bam
+            test -s "../release-smoke/$bin.png"
+          done
+          cmp -s <(head -c 29 "../release-smoke/$tui.png") <(head -c 29 "../release-smoke/$desktop.png")
+          rm -rf ../release-smoke
           "${checksum[@]}" "$tui" "$desktop" > "metadata/SHA256SUMS-$PLATFORM.txt"
       - name: Upload TUI executable
         uses: actions/upload-artifact@v7

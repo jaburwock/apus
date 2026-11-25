@@ -39,6 +39,48 @@ impl EntryKind {
     }
 }
 
+#[derive(clap::Args, Debug, Clone)]
+pub struct CaptureArgs {
+    /// Render headlessly on the CPU, write one PNG to this path, and exit.
+    #[arg(long, value_name = "PATH")]
+    pub capture: Option<PathBuf>,
+
+    /// Output width in pixels (logical pixels in `apus-desktop` windowed mode).
+    /// Defaults to 140 cells wide in capture mode.
+    #[arg(long)]
+    pub width: Option<u32>,
+
+    /// Output height in pixels (logical pixels in `apus-desktop` windowed mode).
+    /// Defaults to 40 cells high in capture mode.
+    #[arg(long)]
+    pub height: Option<u32>,
+
+    /// Font em size in logical points.
+    /// Defaults to 12pt in capture mode (`980x600` for 140x40 cells at 1x).
+    #[arg(long)]
+    pub font_size: Option<f32>,
+
+    /// DPI scale factor for headless capture.
+    #[arg(long, default_value_t = 1.0)]
+    pub scale: f32,
+
+    /// Timeout in milliseconds for headless capture settling.
+    #[arg(long, default_value_t = 10_000)]
+    pub timeout_ms: u64,
+
+    /// Apply optical weight boost (`sqrt(coverage)`) for thicker 1x DPI strokes.
+    #[arg(long, default_value_t = false)]
+    pub weight_boost: bool,
+
+    /// Scripted command to execute in capture mode (repeatable; preserves order with `--key`).
+    #[arg(long = "cmd", value_name = "COMMAND")]
+    pub cmds: Vec<String>,
+
+    /// Scripted key event to send in capture mode (repeatable; preserves order with `--cmd`).
+    #[arg(long = "key", value_name = "KEY")]
+    pub keys: Vec<String>,
+}
+
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct FileArgs {
     /// Read startup commands from this file.
@@ -47,9 +89,11 @@ pub struct FileArgs {
     pub files: Vec<PathBuf>,
 }
 
-#[derive(clap::Parser)]
+#[derive(clap::Parser, Debug)]
 #[command(name = "apus")]
 pub struct Cli {
+    #[command(flatten)]
+    pub capture: CaptureArgs,
     #[command(flatten)]
     pub files: FileArgs,
 }

@@ -10,9 +10,10 @@
 //! events, ticks, and draw calls without knowing how the frontend drives them.
 
 use std::io;
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use crossterm::{
     event::{
         self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event, KeyEventKind,
@@ -24,7 +25,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use apus::{
     ANIMATION_FRAME_INTERVAL, Cli, DRAW_ACTIVITY_WINDOW, Key, Modifiers, MouseEvent, MouseKind,
-    advance_settle_deadline, build_app, drain_should_stop, frame_layout, should_poll_rather_than_block,
+    advance_settle_deadline, build_app, capture, drain_should_stop, frame_layout, should_poll_rather_than_block,
 };
 
 /// Translates a crossterm key code into the library's backend-agnostic [`Key`].
@@ -79,16 +80,44 @@ fn translate_mouse(mouse: event::MouseEvent) -> Option<MouseEvent> {
     })
 }
 
-fn main() -> io::Result<()> {
-    let cli = Cli::parse();
+fn main() -> ExitCode {
+    let matches = Cli::command().get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(err) => {
+            err.print().ok();
+            return ExitCode::FAILURE;
+        }
+    };
 
+    if let Some(output) = cli.capture.capture.clone() {
+        let result = capture::config_from_args(&cli.capture, output, &matches, cli.files).and_then(capture::run);
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("apus: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    match run_terminal(&cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("apus: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_terminal(cli: &Cli) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableFocusChange)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run(&mut terminal, &cli);
+    let result = run(&mut terminal, cli);
 
     disable_raw_mode()?;
     execute!(

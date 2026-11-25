@@ -4,13 +4,14 @@
 //! through [`crate::color`], emits square-corner rects for backgrounds/decorations/procedural grid
 //! glyphs, and emits Slug quads for text glyphs from the embedded Fira Code curve/band textures.
 
+use apus::grid::{
+    CellFlags, CellGrid, CellMetrics, color,
+    procedural::{self, PixelRect},
+};
 use bytemuck::{Pod, Zeroable};
 
-use crate::color;
 use crate::crt::{self, Crt};
-use crate::grid::{CellFlags, CellGrid};
-use crate::procedural::{self, LineWeight};
-use crate::slug::{self, CellMetrics, FontData, GlyphVertex, Point, TEXTURE_WIDTH, build_embedded_fonts};
+use crate::slug::{self, FontData, GlyphVertex, Point, TEXTURE_WIDTH, build_embedded_fonts};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -478,103 +479,8 @@ impl Renderer {
             .extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
     }
 
-    fn push_octant(&mut self, mask: u8, x0: f32, y0: f32, cw: f32, ch: f32, colour: [f32; 4]) {
-        let xs = [x0, x0 + (cw * 0.5).round(), x0 + cw];
-        let ys = [
-            y0,
-            y0 + (ch * 0.25).round(),
-            y0 + (ch * 0.5).round(),
-            y0 + (ch * 0.75).round(),
-            y0 + ch,
-        ];
-
-        // Row masks (2 bits per row: bit 0 = left, bit 1 = right), coalesced vertically.
-        let rows = [mask & 0x03, (mask >> 2) & 0x03, (mask >> 4) & 0x03, (mask >> 6) & 0x03];
-        let mut r = 0usize;
-        while r < 4 {
-            let rm = rows[r];
-            let mut end = r + 1;
-            while end < 4 && rows[end] == rm {
-                end += 1;
-            }
-            match rm {
-                0x01 => self.push_rect(xs[0], ys[r], xs[1], ys[end], colour),
-                0x02 => self.push_rect(xs[1], ys[r], xs[2], ys[end], colour),
-                0x03 => self.push_rect(xs[0], ys[r], xs[2], ys[end], colour),
-                _ => {}
-            }
-            r = end;
-        }
-    }
-
-    fn push_braille(&mut self, mask: u8, x0: f32, y0: f32, cw: f32, ch: f32, colour: [f32; 4]) {
-        if mask == 0 {
-            return;
-        }
-        let xs = [x0, x0 + (cw * 0.5).round(), x0 + cw];
-        let ys = [
-            y0,
-            y0 + (ch * 0.25).round(),
-            y0 + (ch * 0.5).round(),
-            y0 + (ch * 0.75).round(),
-            y0 + ch,
-        ];
-        let dw = (cw * 0.32).round().max(1.0).min((cw * 0.5 - 1.0).max(1.0));
-        let dh = (ch * 0.16).round().max(1.0).min((ch * 0.25 - 1.0).max(1.0));
-
-        const DOT_BITS: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
-        for (col, bits) in DOT_BITS.iter().enumerate() {
-            let dx = ((xs[col] + xs[col + 1] - dw) * 0.5).floor();
-            for (row, &bit) in bits.iter().enumerate() {
-                if (mask & bit) != 0 {
-                    let dy = ((ys[row] + ys[row + 1] - dh) * 0.5).floor();
-                    self.push_rect(dx, dy, dx + dw, dy + dh, colour);
-                }
-            }
-        }
-    }
-
-    fn push_box_drawing(&mut self, arms: procedural::BoxArms, x0: f32, y0: f32, cw: f32, ch: f32, colour: [f32; 4]) {
-        let light = (cw / 8.0).round().max(1.0);
-        let heavy = (light * 2.0).max(2.0);
-        let stroke = |w: LineWeight| match w {
-            LineWeight::None => 0.0,
-            LineWeight::Light => light,
-            LineWeight::Heavy => heavy,
-        };
-
-        let h_thick = stroke(arms.left).max(stroke(arms.right)).max(light);
-        let v_thick = stroke(arms.up).max(stroke(arms.down)).max(light);
-        let vx0 = x0 + ((cw - v_thick) * 0.5).floor();
-        let vx1 = vx0 + v_thick;
-        let hy0 = y0 + ((ch - h_thick) * 0.5).floor();
-        let hy1 = hy0 + h_thick;
-        let x1 = x0 + cw;
-        let y1 = y0 + ch;
-
-        // Horizontal arms
-        match (arms.left, arms.right) {
-            (LineWeight::None, LineWeight::None) => {}
-            (l, r) if l == r => self.push_rect(x0, hy0, x1, hy1, colour),
-            (LineWeight::None, _) => self.push_rect(vx0, hy0, x1, hy1, colour),
-            (_, LineWeight::None) => self.push_rect(x0, hy0, vx1, hy1, colour),
-            _ => {
-                self.push_rect(x0, hy0, vx1, hy1, colour);
-                self.push_rect(vx0, hy0, x1, hy1, colour);
-            }
-        }
-
-        // Vertical arms
-        match (arms.up, arms.down) {
-            (LineWeight::None, LineWeight::None) => {}
-            (u, d) if u == d => self.push_rect(vx0, y0, vx1, y1, colour),
-            (LineWeight::None, _) => self.push_rect(vx0, hy0, vx1, y1, colour),
-            (_, LineWeight::None) => self.push_rect(vx0, y0, vx1, hy1, colour),
-            _ => {
-                self.push_rect(vx0, y0, vx1, hy1, colour);
-                self.push_rect(vx0, hy0, vx1, y1, colour);
-            }
-        }
+    fn push_pixel_rect(&mut self, rect: PixelRect, colour: [f32; 4]) {
+        self.push_rect(rect.x0 as f32, rect.y0 as f32, rect.x1 as f32, rect.y1 as f32, colour);
     }
 
     fn build_geometry(&mut self, grid: &CellGrid, metrics: CellMetrics) {
@@ -586,13 +492,13 @@ impl Renderer {
         let cols = usize::from(grid.cols());
         let rows = usize::from(grid.rows());
         let cells = grid.cells();
-        let cw = metrics.width_px;
-        let ch = metrics.height_px;
+        let cw = metrics.width_px.round().max(1.0) as i32;
+        let ch = metrics.height_px.round().max(1.0) as i32;
         let is_srgb = self.scene_format.is_srgb();
 
         // Pass 1: cell backgrounds, coalesced into horizontal runs per row.
         for r in 0..rows {
-            let y0 = r as f32 * ch;
+            let y0 = r as i32 * ch;
             let y1 = y0 + ch;
             let row = &cells[r * cols..(r + 1) * cols];
             let mut c = 0usize;
@@ -603,30 +509,37 @@ impl Renderer {
                     end += 1;
                 }
                 let bg = color::rgba(bg_idx, 1.0, is_srgb);
-                self.push_rect(c as f32 * cw, y0, end as f32 * cw, y1, bg);
+                self.push_pixel_rect(
+                    PixelRect {
+                        x0: c as i32 * cw,
+                        y0,
+                        x1: end as i32 * cw,
+                        y1,
+                    },
+                    bg,
+                );
                 c = end;
             }
         }
 
         // Pass 2: decorations, procedural grid glyphs, and Slug text quads.
-        let rule_thickness = (cw / 9.0).round().max(1.0);
         for r in 0..rows {
-            let y0 = r as f32 * ch;
-            let y1 = y0 + ch;
+            let y0 = r as i32 * ch;
             let row = &cells[r * cols..(r + 1) * cols];
             for (c, cell) in row.iter().enumerate() {
-                let x0 = c as f32 * cw;
-                let x1 = x0 + cw;
-                let alpha = if cell.flags.contains(CellFlags::DIM) { 0.65 } else { 1.0 };
+                let x0 = c as i32 * cw;
+                let alpha = if cell.flags.contains(CellFlags::DIM) {
+                    color::DIM_ALPHA
+                } else {
+                    1.0
+                };
                 let fg = color::rgba(cell.fg, alpha, is_srgb);
 
                 if cell.flags.contains(CellFlags::UNDERLINED) {
-                    let uy = (y0 + metrics.baseline_px + rule_thickness).min(y1 - rule_thickness);
-                    self.push_rect(x0, uy, x1, uy + rule_thickness, fg);
+                    self.push_pixel_rect(procedural::underline_rect(x0, y0, metrics), fg);
                 }
                 if cell.flags.contains(CellFlags::CROSSED_OUT) {
-                    let sy = (y0 + metrics.baseline_px - metrics.size_px * 0.32).round();
-                    self.push_rect(x0, sy, x1, sy + rule_thickness, fg);
+                    self.push_pixel_rect(procedural::strikethrough_rect(x0, y0, metrics), fg);
                 }
 
                 if cell.symbol == ' ' {
@@ -634,17 +547,17 @@ impl Renderer {
                 }
 
                 if let Some(mask) = procedural::octant_mask(cell.symbol) {
-                    self.push_octant(mask, x0, y0, cw, ch, fg);
+                    procedural::octant_rects(mask, x0, y0, cw, ch, |rect| self.push_pixel_rect(rect, fg));
                 } else if let Some(mask) = procedural::braille_mask(cell.symbol) {
-                    self.push_braille(mask, x0, y0, cw, ch, fg);
+                    procedural::braille_rects(mask, x0, y0, cw, ch, |rect| self.push_pixel_rect(rect, fg));
                 } else if let Some(arms) = procedural::box_drawing_arms(cell.symbol) {
-                    self.push_box_drawing(arms, x0, y0, cw, ch, fg);
+                    procedural::box_drawing_rects(arms, x0, y0, cw, ch, |rect| self.push_pixel_rect(rect, fg));
                 } else {
                     let record = self.font_data.glyph(cell.symbol, cell.flags.contains(CellFlags::BOLD));
                     if !record.empty {
                         let origin = Point {
-                            x: x0,
-                            y: y0 + metrics.baseline_px,
+                            x: x0 as f32,
+                            y: y0 as f32 + metrics.baseline_px,
                         };
                         let quad = slug::make_glyph_quad(record, origin, metrics.size_px, fg);
                         let base = self.glyph_vertices.len() as u32;

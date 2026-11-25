@@ -8,7 +8,7 @@ mod pack;
 
 use bytemuck::{Pod, Zeroable};
 
-pub use font_data::{CellMetrics, FontData, GlyphRecord, TEXTURE_WIDTH, build_embedded_fonts};
+pub use font_data::{FontData, GlyphRecord, TEXTURE_WIDTH, build_embedded_fonts};
 pub use outline::Point;
 
 /// Vertex format matching `shaders/glyph.wgsl`.

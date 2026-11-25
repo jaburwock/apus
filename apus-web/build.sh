@@ -32,5 +32,5 @@ wasm-bindgen --target web --no-typescript --out-dir dist --out-name apus_web \
 cp index.html main.js dist/
 cp "$stage"/{data-credits.txt,ONT-MIT-LICENSE.txt,NIST-DATA-NOTICE.txt} dist/
 cp ../apus-desktop/src/shaders/Slug-MIT-LICENSE.txt dist/
-cp ../apus-desktop/assets/fonts/LICENSE dist/FiraCode-OFL.txt
+cp ../src/grid/fonts/LICENSE dist/FiraCode-OFL.txt
 cp ../LICENSE.md dist/Apus-LICENSE.md

@@ -65,6 +65,25 @@ set activebam "/data/sample A.bam"
 addbam "/data/sample B.bam"
 ```
 
+### Headless capture
+
+Both `apus` and `apus-desktop` support `--capture PATH` to render a settled view on the CPU and
+write a PNG without a terminal, display server, graphics driver, or system font installation.
+Pass `--cmd` and `--key` in the order they should replay after startup:
+
+```sh
+apus --capture hg002-deletion.png \
+  --cmd ':focustab GenomeViewer' \
+  --cmd ':set activecontig chr1' \
+  --cmd ':goto 108190703,' \
+  testdata/hg002/demo/hg38-demo.fa.gz \
+  testdata/hg002/demo/HG002_DEL2477_INS975.bam
+```
+
+On Linux with Mesa `llvmpipe`, `apus-desktop --llvmcapture PATH` (renamed from `--capture`) renders
+the same settled view through the native GPU Slug pipeline (with optional `--crt`) for renderer
+testing. `--capture` cannot be combined with `--llvmcapture` or `--crt`.
+
 ### Desktop and examples
 
 To build and run the GPU-rendered desktop window instead of the terminal, use
@@ -116,6 +135,7 @@ files and the license notices. Open the draft from the workflow summary and publ
 Apus is distributed under the [MIT License](LICENSE.md). The example data have their own
 [credits and terms](testdata/README.md#fixture-credits), including the [bundled HG002 examples](testdata/README.md#bundled-hg002-examples).
 
-Include the Apus license with binary distributions. Desktop and web builds also include Slug
-shader code and embed Fira Code. Ship their [Slug MIT notice](apus-desktop/src/shaders/Slug-MIT-LICENSE.txt)
-and [Fira Code OFL notice](apus-desktop/assets/fonts/LICENSE) with those builds.
+Include the Apus license with binary distributions. Both `apus` and `apus-desktop` embed Fira
+Code for headless `--capture` rendering, and desktop and web builds also include Slug shader code.
+Ship the [Fira Code OFL notice](src/grid/fonts/LICENSE) with both binaries, and the
+[Slug MIT notice](apus-desktop/src/shaders/Slug-MIT-LICENSE.txt) with desktop and web builds.
