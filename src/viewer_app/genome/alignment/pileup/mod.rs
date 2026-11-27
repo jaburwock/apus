@@ -19,7 +19,7 @@ mod paint;
 
 use std::ops::Range;
 
-use paint::{LaneGlyphs, paint_expansion_lane, paint_one_lane_against};
+use paint::{LaneGlyphs, paint_expansion_lane, paint_mid_vertical_skips, paint_one_lane_against};
 
 use ratatui::layout::Rect;
 
@@ -287,14 +287,27 @@ pub(super) fn draw_reads_against(
         bp_per_column,
         settings.readcolor == ReadColor::FiveMc,
     );
+    let mid_vertical_skips = lanes_per_row == 2 && bp_per_column == 1;
+    let clip_bp = bounds_bp.min(bp_width);
+    let mut top_skips = if mid_vertical_skips {
+        vec![false; clip_bp]
+    } else {
+        Vec::new()
+    };
+    let mut top_has_skips = false;
 
     for (row, (row_length, row_indel)) in centreline_read_lengths
         .iter_mut()
         .zip(centreline_indels.iter_mut())
         .enumerate()
     {
+        let mut bottom_is_reads = false;
         for lane_offset in 0..lanes_per_row {
             let lane_y = row * lanes_per_row + lane_offset;
+            if mid_vertical_skips && lane_offset == 0 && top_has_skips {
+                top_skips.fill(false);
+                top_has_skips = false;
+            }
             match &visible_lanes[lane_y] {
                 DisplayLane::Reads { logical_lane, reads } => {
                     lane_logical_indices.push(Some(*logical_lane));
@@ -314,6 +327,18 @@ pub(super) fn draw_reads_against(
                         &mut coverage,
                         ReferenceLookup::new(reference, contig),
                     );
+                    if mid_vertical_skips {
+                        if lane_offset == 0 {
+                            for x in coverage.covered_bp_range(clip_bp) {
+                                if coverage.kind_at_bp(left + BasePair(x as u64)) == BaseKind::Skip {
+                                    top_skips[x] = true;
+                                    top_has_skips = true;
+                                }
+                            }
+                        } else {
+                            bottom_is_reads = true;
+                        }
+                    }
 
                     if show_centreline_labels && let Some(centre_bp) = centre_bp {
                         *row_length = reads
@@ -353,6 +378,16 @@ pub(super) fn draw_reads_against(
                     }
                 }
             }
+        }
+        if mid_vertical_skips && (top_has_skips || bottom_is_reads) {
+            paint_mid_vertical_skips(
+                fb,
+                row * lanes_per_row,
+                left,
+                centline_x,
+                &top_skips,
+                bottom_is_reads.then_some(&coverage),
+            );
         }
     }
 
@@ -1952,6 +1987,7 @@ mod tests {
         let track_bg = Surface::TRACK_BG();
         let lane0 = Alignment::pileup_lane_color_pair(0);
         let lane1 = Alignment::pileup_lane_color_pair(1);
+        let lane2 = Alignment::pileup_lane_color_pair(2);
 
         // 1. (Close, Close): hyphens on plain track bg, centline rule preserved, and `_10bp` label.
         {
@@ -2048,10 +2084,11 @@ mod tests {
             }
         }
 
-        // 3. (Close, Mid): top lane skip stays plain track bg without clobbering the sibling lane.
+        // 3. (Close, Mid): pair-aware packing separates `sibling` into row 1 (lane 2), leaving
+        //    row 0's skip free to render top-only Braille (`⠒`) while preserving the centline rule.
         {
             let mut settings = settings(1);
-            settings.centline = false;
+            settings.centline = true;
             let mut reference = seeded_reference();
             let buf = draw_to_buffer_against(
                 &mut cache,
@@ -2063,10 +2100,111 @@ mod tests {
                 &settings,
                 &mut reference,
             );
+            let cent_col = cent_column(area).unwrap();
             for col in 5..15u16 {
                 let cell = buf.get(col, 0);
-                assert_eq!(cell.fg, track_bg, "top lane skip at col {col}");
-                assert_eq!(cell.bg, lane1.pick(col % 2 == 1), "bottom sibling intact at col {col}");
+                if col == cent_col {
+                    assert_eq!(cell.symbol(), crate::viewer_app::painter::VERTICAL_RULE.to_string());
+                    assert_eq!(cell.bg, track_bg);
+                } else {
+                    assert_eq!(cell.symbol(), "⠒", "top-only skip Braille at col {col}");
+                    assert_eq!(cell.bg, track_bg, "top-only skip bg at col {col}");
+                }
+                if col != cent_col {
+                    let sibling_cell = buf.get(col, 1);
+                    assert_eq!(
+                        sibling_cell.fg,
+                        lane2.pick(col % 2 == 1),
+                        "separated unspliced sibling renders in row 1 top half at col {col}"
+                    );
+                }
+            }
+        }
+
+        // 4. (Close, Mid): matching-junction split reads pair into (0, 1) with double Braille (`⣒`),
+        //    and a bottom-only skip paired with an upstream exon renders bottom Braille (`⣀`).
+        {
+            let mut pair_cache = test_cache(4, BasePair(1_000));
+            let s0 = Read {
+                id: id("s0"),
+                ..read_cigar(0, "5M10N5M", None)
+            };
+            let s1 = Read {
+                id: id("s1"),
+                ..read_cigar(1, "4M10N5M", None)
+            };
+            // Monotonic starts give deterministic lanes: (s0, s1) in (0, 1) and (top_exon, bot_only) in (2, 3).
+            let top_exon = Read {
+                id: id("top_exon"),
+                ..read_cigar(2, "3M", None)
+            };
+            let bot_only = Read {
+                id: id("bot_only"),
+                ..read_cigar(3, "2M10N5M", None)
+            };
+            pair_cache.insert_reads("chr1".to_string(), BasePair(0), vec![s0, s1, top_exon, bot_only]);
+            let mut settings = settings(1);
+            settings.centline = false;
+            let mut reference = seeded_reference();
+            let buf = draw_to_buffer_against(
+                &mut pair_cache,
+                &mut UnreachableSource,
+                area,
+                view(BasePair(0), BasePair(0), area.width, 1),
+                &contig(FAR),
+                vertical(2),
+                &settings,
+                &mut reference,
+            );
+            for col in 5..15u16 {
+                assert_eq!(buf.get(col, 0).symbol(), "⣒", "paired skips at col {col}");
+                assert_eq!(buf.get(col, 0).bg, track_bg);
+                assert_eq!(buf.get(col, 1).symbol(), "⣀", "bottom-only skip at col {col}");
+                assert_eq!(buf.get(col, 1).bg, track_bg);
+            }
+        }
+
+        // 5. (Close, Mid) + `expandinsertions`: an expansion sub-lane shifts logical lanes (1, 2)
+        //    into visual row 1, where a skip must fall back without clobbering the sibling pixel.
+        {
+            let mut parity_cache = test_cache(4, BasePair(1_000));
+            let ins_parent = Read {
+                id: id("ins_parent"),
+                ..read_cigar(0, "5M60I15M", None)
+            };
+            let unspliced = Read {
+                id: id("unspliced"),
+                ..read_cigar(1, "19M", None)
+            };
+            let split_shifted = Read {
+                id: id("split_shifted"),
+                ..read_cigar(2, "3M10N7M", None)
+            };
+            parity_cache.insert_reads(
+                "chr1".to_string(),
+                BasePair(0),
+                vec![ins_parent, unspliced, split_shifted],
+            );
+            let mut settings = settings(1);
+            settings.centline = false;
+            settings.expandinsertions = true;
+            let mut reference = seeded_reference();
+            let buf = draw_to_buffer_against(
+                &mut parity_cache,
+                &mut UnreachableSource,
+                area,
+                view(BasePair(0), BasePair(0), area.width, 1),
+                &contig(FAR),
+                vertical(2),
+                &settings,
+                &mut reference,
+            );
+            // Row 1 holds logical lane 1 (`unspliced`, top) and logical lane 2 (`split_shifted`, bottom).
+            for col in 5..15u16 {
+                let cell = buf.get(col, 1);
+                assert_ne!(cell.symbol(), "⣀", "must not clobber sibling pixel at col {col}");
+                assert_eq!(cell.fg, lane1.pick(col % 2 == 1), "top sibling intact at col {col}");
+                assert_eq!(cell.bg, track_bg, "bottom skip leaves track bg at col {col}");
             }
         }
     }

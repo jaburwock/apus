@@ -14,8 +14,10 @@
 //! completed; it never fetches as a side effect of that read-only query.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::basepair::BasePair;
+use crate::cigar::CigarKind;
 
 use super::read::{Read, ReadId};
 use super::window_counts::{CoverageWindow, WindowCounts, counts_from_reads};
@@ -141,13 +143,14 @@ pub(super) struct ReadWindowCache {
     errors: Vec<String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Candidate {
     window_start: BasePair,
     read_idx: usize,
     start: BasePair,
     length: BasePair,
     id: ReadId,
+    skips: Option<Arc<[(BasePair, BasePair)]>>,
 }
 
 #[derive(Clone, Copy)]
@@ -159,9 +162,10 @@ struct ReadLocator {
     id: ReadId,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct TileAssignment {
     locator: ReadLocator,
+    skips: Option<Arc<[(BasePair, BasePair)]>>,
     lane: usize,
 }
 
@@ -257,10 +261,10 @@ impl LaneLayoutCache {
         for tile_start in new_tiles {
             let tile_candidates = candidates
                 .iter()
-                .copied()
                 .filter(|candidate| {
                     candidate.start + candidate.length > tile_start && candidate.start < tile_start + LANE_TILE_LEN
                 })
+                .cloned()
                 .collect::<Vec<_>>();
             let neighbour_start = if tile_start < old_start {
                 tile_start + LANE_TILE_LEN
@@ -276,7 +280,7 @@ impl LaneLayoutCache {
                     assignment.locator.start + assignment.locator.length > tile_start
                         && assignment.locator.start < tile_start + LANE_TILE_LEN
                 })
-                .map(|assignment| (assignment.locator, assignment.lane))
+                .cloned()
                 .collect::<Vec<_>>();
             let tile = build_tile(tile_start, tile_candidates, &mut preferred, &fixed);
             for assignment in &tile.assignments {
@@ -295,7 +299,7 @@ impl LaneLayoutCache {
                 tile_contig == contig && (*tile_start < old_start || *tile_start >= old_end)
             })
             .flat_map(|(_, tile)| tile.assignments.iter())
-            .copied()
+            .cloned()
             .collect::<Vec<_>>();
         for assignment in additions {
             let first_tile = tile_grid_start(assignment.locator.start);
@@ -310,7 +314,7 @@ impl LaneLayoutCache {
                             && existing.locator.start == assignment.locator.start
                     })
                 {
-                    tile.assignments.push(assignment);
+                    tile.assignments.push(assignment.clone());
                 }
                 tile_start = tile_start + LANE_TILE_LEN;
             }
@@ -568,6 +572,127 @@ fn tile_starts(start: BasePair, end: BasePair) -> Vec<BasePair> {
     starts
 }
 
+fn skip_spans(read: &Read) -> Option<Arc<[(BasePair, BasePair)]>> {
+    let mut skips: Vec<(BasePair, BasePair)> = Vec::new();
+    let mut pos = read.start;
+    for op in read.cigar.ops() {
+        let len = BasePair(op.len() as u64);
+        if op.kind() == CigarKind::Skip && len > BasePair(0) {
+            let end = pos + len;
+            if let Some(last) = skips.last_mut()
+                && last.1 == pos
+            {
+                last.1 = end;
+            } else {
+                skips.push((pos, end));
+            }
+            pos = end;
+        } else if op.kind().consumes_reference() {
+            pos = pos + len;
+        }
+    }
+    (!skips.is_empty()).then(|| Arc::from(skips))
+}
+
+fn for_each_aligned_span(
+    start: BasePair,
+    length: BasePair,
+    skips: &[(BasePair, BasePair)],
+    mut visit: impl FnMut(BasePair, BasePair),
+) {
+    let end = start + length;
+    let mut cursor = start;
+    for &(skip_start, skip_end) in skips {
+        let clamped_start = skip_start.min(end);
+        if clamped_start > cursor {
+            visit(cursor, clamped_start);
+        }
+        cursor = cursor.max(skip_end);
+    }
+    if cursor < end {
+        visit(cursor, end);
+    }
+}
+
+fn span_overlaps(spans: &[(BasePair, BasePair)], start: BasePair, end: BasePair) -> bool {
+    spans.iter().any(|&(left, right)| left < end && start < right)
+}
+
+fn aligned_overlaps_skips(
+    start: BasePair,
+    length: BasePair,
+    skips: &[(BasePair, BasePair)],
+    other_skips: &[(BasePair, BasePair)],
+) -> bool {
+    if other_skips.is_empty() {
+        return false;
+    }
+    let end = start + length;
+    let mut cursor = start;
+    for &(skip_start, skip_end) in skips {
+        let clamped_start = skip_start.min(end);
+        if clamped_start > cursor && span_overlaps(other_skips, cursor, clamped_start) {
+            return true;
+        }
+        cursor = cursor.max(skip_end);
+    }
+    cursor < end && span_overlaps(other_skips, cursor, end)
+}
+
+#[derive(Default)]
+struct LaneSpans {
+    /// Padded full read spans `[start, start + length + 1)` enforcing the 1 bp same-lane gap.
+    full: Vec<(BasePair, BasePair)>,
+    /// Exact aligned (non-skip) spans `[a, b)` for sibling-lane `(2k, 2k + 1)` skip exclusion.
+    aligned: Vec<(BasePair, BasePair)>,
+    /// Exact skip (`N`) spans `[s, e)` for sibling-lane `(2k, 2k + 1)` aligned-base exclusion.
+    skips: Vec<(BasePair, BasePair)>,
+}
+
+/// Tracks per-lane and sibling-lane occupancy while packing one layout tile.
+///
+/// At `(Close, Mid)` zoom lanes `2k` and `2k + 1` reduce into the same terminal cell, which can
+/// hold at most two colours. Avoiding aligned-vs-skip overlaps within each `(2k, 2k + 1)` pair
+/// leaves skip connectors visible on the plain track background without clobbering a sibling read,
+/// while still pairing reads that share a splice junction into the same row with no wasted lanes.
+#[derive(Default)]
+struct LaneOccupancy {
+    lanes: HashMap<usize, LaneSpans>,
+}
+
+impl LaneOccupancy {
+    fn can_place(&self, lane: usize, start: BasePair, length: BasePair, skips: &[(BasePair, BasePair)]) -> bool {
+        let padded_end = start + length + BasePair(1);
+        if self
+            .lanes
+            .get(&lane)
+            .is_some_and(|spans| span_overlaps(&spans.full, start, padded_end))
+        {
+            return false;
+        }
+        let Some(sibling) = self.lanes.get(&(lane ^ 1)) else {
+            return true;
+        };
+        if !skips.is_empty()
+            && skips
+                .iter()
+                .any(|&(skip_start, skip_end)| span_overlaps(&sibling.aligned, skip_start, skip_end))
+        {
+            return false;
+        }
+        !aligned_overlaps_skips(start, length, skips, &sibling.skips)
+    }
+
+    fn insert(&mut self, lane: usize, start: BasePair, length: BasePair, skips: &[(BasePair, BasePair)]) {
+        let entry = self.lanes.entry(lane).or_default();
+        entry.full.push((start, start + length + BasePair(1)));
+        for_each_aligned_span(start, length, skips, |a_start, a_end| {
+            entry.aligned.push((a_start, a_end));
+        });
+        entry.skips.extend_from_slice(skips);
+    }
+}
+
 fn collect_layout_candidates(
     windows: &[WindowEntry],
     contig: &str,
@@ -583,71 +708,70 @@ fn collect_layout_candidates(
             WindowEntry::Failed { .. } => None,
         })
         .flat_map(|window| {
-            window.reads.iter().enumerate().map(move |(read_idx, read)| Candidate {
-                window_start: window.start,
-                read_idx,
-                start: read.start,
-                length: read.length,
-                id: read.id,
-            })
+            window
+                .reads
+                .iter()
+                .enumerate()
+                .filter(move |(_, read)| read.start + read.length > span_start && read.start < span_end)
+                .map(move |(read_idx, read)| (window.start, read_idx, read))
         })
-        .filter(|candidate| candidate.start + candidate.length > span_start && candidate.start < span_end)
-        .filter(|candidate| seen.insert((candidate.id, candidate.start)))
+        .filter(|(_, _, read)| seen.insert((read.id, read.start)))
+        .map(|(window_start, read_idx, read)| Candidate {
+            window_start,
+            read_idx,
+            start: read.start,
+            length: read.length,
+            id: read.id,
+            skips: skip_spans(read),
+        })
         .collect()
-}
-
-fn intervals_overlap(
-    intervals: &HashMap<usize, Vec<(BasePair, BasePair)>>,
-    lane: usize,
-    start: BasePair,
-    end: BasePair,
-) -> bool {
-    intervals
-        .get(&lane)
-        .is_some_and(|lane_intervals| lane_intervals.iter().any(|&(left, right)| left < end && start < right))
 }
 
 fn build_tile(
     start: BasePair,
     mut candidates: Vec<Candidate>,
     preferred: &mut HashMap<(ReadId, BasePair), usize>,
-    fixed: &[(ReadLocator, usize)],
+    fixed: &[TileAssignment],
 ) -> LaneTile {
     // Retain existing lanes before assigning new reads introduced by a newly landed window.
     candidates.sort_by_key(|candidate| {
         let key = (candidate.id, candidate.start);
         (!preferred.contains_key(&key), candidate.start, candidate.id)
     });
-    let mut intervals: HashMap<usize, Vec<(BasePair, BasePair)>> = HashMap::new();
+    let mut occupancy = LaneOccupancy::default();
     let mut assignments = Vec::with_capacity(candidates.len());
     let mut fixed_ids = HashSet::new();
-    for &(locator, lane) in fixed {
-        if !fixed_ids.insert((locator.id, locator.start)) {
+    for assignment in fixed {
+        if !fixed_ids.insert((assignment.locator.id, assignment.locator.start)) {
             continue;
         }
-        let end = locator.start + locator.length + BasePair(1);
-        intervals.entry(lane).or_default().push((locator.start, end));
-        assignments.push(TileAssignment { locator, lane });
+        occupancy.insert(
+            assignment.lane,
+            assignment.locator.start,
+            assignment.locator.length,
+            assignment.skips.as_deref().unwrap_or(&[]),
+        );
+        assignments.push(assignment.clone());
     }
 
-    let mut next_lane = intervals.keys().copied().max().map_or(0, |lane| lane + 1);
     for candidate in candidates {
         let key = (candidate.id, candidate.start);
         if fixed_ids.contains(&key) {
             continue;
         }
-        let end = candidate.start + candidate.length + BasePair(1);
+        let skips = candidate.skips.as_deref().unwrap_or(&[]);
+        // Search from 0 rather than falling back to `next_lane`: an odd `next_lane` pairs with
+        // occupied `next_lane - 1` and may conflict with its skips or aligned bases.
         let lane = preferred
             .get(&key)
             .copied()
-            .filter(|&lane| !intervals_overlap(&intervals, lane, candidate.start, end))
+            .filter(|&lane| occupancy.can_place(lane, candidate.start, candidate.length, skips))
             .unwrap_or_else(|| {
-                (0..next_lane)
-                    .find(|&lane| !intervals_overlap(&intervals, lane, candidate.start, end))
-                    .unwrap_or(next_lane)
+                (0..)
+                    .find(|&lane| occupancy.can_place(lane, candidate.start, candidate.length, skips))
+                    .expect("an empty lane pair always exists")
             });
-        next_lane = next_lane.max(lane + 1);
-        intervals.entry(lane).or_default().push((candidate.start, end));
+        occupancy.insert(lane, candidate.start, candidate.length, skips);
         assignments.push(TileAssignment {
             locator: ReadLocator {
                 window_start: candidate.window_start,
@@ -656,6 +780,7 @@ fn build_tile(
                 length: candidate.length,
                 id: candidate.id,
             },
+            skips: candidate.skips,
             lane,
         });
         preferred.insert(key, lane);
@@ -680,8 +805,8 @@ fn build_tiles(
     for start in tile_starts(span_start, span_end) {
         let tile_candidates = candidates
             .iter()
-            .copied()
             .filter(|candidate| candidate.start + candidate.length > start && candidate.start < start + LANE_TILE_LEN)
+            .cloned()
             .collect::<Vec<_>>();
         let fixed = if start == span_start {
             Vec::new()
@@ -694,7 +819,7 @@ fn build_tiles(
                     assignment.locator.start + assignment.locator.length > start
                         && assignment.locator.start < start + LANE_TILE_LEN
                 })
-                .map(|assignment| (assignment.locator, assignment.lane))
+                .cloned()
                 .collect()
         };
         let tile = build_tile(start, tile_candidates, &mut preferred, &fixed);
@@ -1454,6 +1579,7 @@ mod tests {
             start: BasePair(2_100),
             length: BasePair::length(20),
             id: id("existing"),
+            skips: None,
         };
         let crossing = Candidate {
             window_start: BasePair(0),
@@ -1461,13 +1587,14 @@ mod tests {
             start: BasePair(1_990),
             length: BasePair::length(30),
             id: id("crossing"),
+            skips: None,
         };
         let mut layout = LaneLayoutCache {
             tiles: build_tiles(
                 "chr1",
                 BasePair(2_000),
                 BasePair(4_000),
-                vec![existing],
+                vec![existing.clone()],
                 &HashMap::new(),
             ),
             span: Some(("chr1".to_string(), BasePair(2_000), BasePair(4_000))),
@@ -1493,5 +1620,104 @@ mod tests {
                 .any(|assignment| assignment.locator.id == id("crossing")),
             "a read introduced by the left tile must also be materialised in the old tile"
         );
+    }
+
+    fn read_cigar(start: u64, cigar: &str, name: &str) -> Read {
+        let ops = crate::cigar::parse_ops(cigar);
+        Read {
+            start: BasePair(start),
+            length: BasePair::length(crate::cigar::ref_len(&ops)),
+            id: id(name),
+            cigar: ops,
+            seq: None,
+            strand: Strand::Forward,
+            mod_5mc: None,
+        }
+    }
+
+    #[test]
+    fn pair_aware_packing_separates_skips_from_aligned_siblings_and_pairs_matching_junctions() {
+        // 1. Odd `next_lane` fallback, matching-junction pairing, and unspliced pairing:
+        //    u0 (lane 0) blocks s0 from lane 1 (aligned [0, 20) overlaps skip [5, 15)) so s0
+        //    takes lane 2; u1 still pairs with u0 in lane 1, and s1 (same skip [5, 15)) pairs
+        //    with s0 in lane 3 with zero wasted lanes.
+        let mut cache = test_cache(4, BasePair(1_000));
+        cache.insert_reads(
+            "chr1".to_string(),
+            BasePair(0),
+            vec![
+                read_cigar(0, "20M", "u0"),
+                read_cigar(1, "4M10N5M", "s0"),
+                read_cigar(2, "18M", "u1"),
+                read_cigar(2, "3M10N7M", "s1"),
+            ],
+        );
+        let lanes: HashMap<ReadId, usize> = cache
+            .resolve(&mut UnreachableSource, "chr1", BasePair(0), BasePair(30))
+            .into_iter()
+            .map(|lr| (lr.read.id, lr.lane))
+            .collect();
+        assert_eq!(lanes[&id("u0")], 0);
+        assert_eq!(lanes[&id("u1")], 1);
+        assert_eq!(lanes[&id("s0")], 2);
+        assert_eq!(lanes[&id("s1")], 3);
+
+        // 2. Exact half-open boundary: an aligned read ending where a sibling skip starts
+        //    ([0, 5) vs skip [5, 15)) does not share a base with the skip and pairs into lane 1.
+        let mut boundary_cache = test_cache(4, BasePair(1_000));
+        boundary_cache.insert_reads(
+            "chr1".to_string(),
+            BasePair(0),
+            vec![read_cigar(0, "5M10N5M", "split"), read_cigar(0, "5M", "exon_only")],
+        );
+        let boundary_lanes: HashMap<ReadId, usize> = boundary_cache
+            .resolve(&mut UnreachableSource, "chr1", BasePair(0), BasePair(30))
+            .into_iter()
+            .map(|lr| (lr.read.id, lr.lane))
+            .collect();
+        assert_eq!(
+            boundary_lanes[&id("split")] ^ 1,
+            boundary_lanes[&id("exon_only")],
+            "exact half-open exon/skip boundary must allow pairing in (2k, 2k+1)"
+        );
+
+        // 3. Tile seam and incremental `extend`: a fixed split read crossing LANE_TILE_LEN (2000)
+        //    retains its skip spans in the next tile, pairing with a matching-junction read and
+        //    separating an unspliced read that overlaps its skip in the new tile.
+        let seam_reads = vec![
+            read_cigar(1_990, "5M20N5M", "seam_split"),   // skip [1995, 2015)
+            read_cigar(1_992, "3M20N8M", "seam_partner"), // skip [1995, 2015)
+            read_cigar(2_000, "15M", "right_unspliced"),  // aligned [2000, 2015)
+        ];
+        for (first_view, second_view) in [
+            ((BasePair(1_900), BasePair(100)), (BasePair(1_900), BasePair(200))),
+            ((BasePair(2_000), BasePair(100)), (BasePair(1_900), BasePair(200))),
+        ] {
+            let mut seam_cache = test_cache(4, BasePair(2_000));
+            let mut source = FixtureSource::new(seam_reads.clone());
+            let first = seam_cache.resolve(&mut source, "chr1", first_view.0, first_view.1);
+            let first_split_lane = first.iter().find(|lr| lr.read.id == id("seam_split")).unwrap().lane;
+
+            let second: HashMap<ReadId, usize> = seam_cache
+                .resolve(&mut source, "chr1", second_view.0, second_view.1)
+                .into_iter()
+                .map(|lr| (lr.read.id, lr.lane))
+                .collect();
+            assert_eq!(
+                second[&id("seam_split")],
+                first_split_lane,
+                "crossing split read must keep its lane across tile extension"
+            );
+            assert_eq!(
+                second[&id("seam_split")] ^ 1,
+                second[&id("seam_partner")],
+                "matching-junction split read must pair across the tile seam"
+            );
+            assert_ne!(
+                second[&id("seam_split")] / 2,
+                second[&id("right_unspliced")] / 2,
+                "unspliced read overlapping a fixed crossing read's skip must not share its lane pair"
+            );
+        }
     }
 }

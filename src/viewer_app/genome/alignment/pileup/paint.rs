@@ -76,7 +76,7 @@ pub(super) struct LaneGlyphs {
     pub(super) digits: bool,
     /// Direction arrows.
     pub(super) arrows: bool,
-    /// Reference-skip (`N`) connectors, which survive 2bp columns like arrows but not 2-lane rows.
+    /// Single-lane reference-skip (`N`) `-` connectors; 2-lane rows use `paint_mid_vertical_skips`.
     pub(super) skips: bool,
     /// Whether large insertions expand into synthetic sub-lanes (switches parent `'I'` to `'▼'`).
     pub(super) expand_insertions: bool,
@@ -407,6 +407,48 @@ pub(super) fn paint_expansion_lane(
                 fb.clear_glyph(x, lane_y);
             }
         }
+    }
+}
+
+/// Paints Braille reference-skip (`N`) connectors for one `(Close, Mid)` cell row after both
+/// sub-lanes (`top_y` and `top_y + 1`) have been painted.
+///
+/// Uses dots 2,5 (`⠒`) for the top lane and dots 7,8 (`⣀`) for the bottom lane (`⣒` when both
+/// skip) for uniform 2-dot vertical pitch across lanes and row boundaries. Leaves a cell untouched
+/// at the centline or if either sub-lane already painted a pixel (such as when `expandinsertions`
+/// shifts logical lane pairs out of visual row parity).
+pub(super) fn paint_mid_vertical_skips(
+    fb: &mut Framebuffer,
+    top_y: usize,
+    left: BasePair,
+    centline_x: Option<usize>,
+    top_skips: &[bool],
+    bottom_coverage: Option<&LaneCoverage>,
+) {
+    for (x, &top_skip) in top_skips.iter().enumerate() {
+        if centline_x == Some(x) {
+            continue;
+        }
+        let bot_skip = bottom_coverage.is_some_and(|cov| cov.kind_at_bp(left + BasePair(x as u64)) == BaseKind::Skip);
+        let ch = match (top_skip, bot_skip) {
+            (true, false) => '⠒',
+            (false, true) => '⣀',
+            (true, true) => '⣒',
+            (false, false) => continue,
+        };
+        if fb.pixel(x, top_y).is_some() || fb.pixel(x, top_y + 1).is_some() {
+            continue;
+        }
+        fb.set_glyph(
+            x,
+            top_y,
+            Glyph {
+                ch,
+                fg: Text::DIMMED_FG(),
+                bg: None,
+                bold: false,
+            },
+        );
     }
 }
 

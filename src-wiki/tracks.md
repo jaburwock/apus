@@ -58,14 +58,13 @@ design. This page holds the rules that span files or tracks.
 - **Depth comes from the alignment fetch.** A BAM window's coverage is computed with its reads
   (`alignment/window_counts.rs`), so a source cannot return reads it hasn't counted. Depth sums
   the allele counts, including deletions and unknown bases. CIGAR reference skips contribute no
-  depth and render as `-` connectors on the plain track background at single-lane zoom rather than
-  filled read bases. The coverage track and depth readouts
+  depth and render on the plain track background rather than as filled read bases (`-` at
+  single-lane zoom; Braille connectors at `(Close, Mid)`, skipped if either sub-lane already
+  painted a pixel). The coverage track and depth readouts
   read it through `AlignmentTrack::coverage_at`, which never fetches, after `AlignmentTrack::draw`
   has requested the windows. Insertion clustering uses five extra bases on either side of the
   BAM query window. Each window returns only its own depth, spanning reads, and cluster medians.
 - **Pileup lanes use a fixed tile grid.** BAM fetch windows vary with read span. Reads can cross
-  both grids and must keep one lane as they pass between tiles and cache windows.
-
-## Active plans
-
-- [Mid-vertical split-read layout and Braille connectors](plan-split-mid-vertical.md)
+  both grids and must keep one lane as they pass between tiles and cache windows. Packing also
+  avoids mixing aligned bases and skips within a `(2k, 2k + 1)` lane pair so `(Close, Mid)`
+  skip cells stay pixel-free while still pairing matching junctions.
