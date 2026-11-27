@@ -1,8 +1,9 @@
 //! Builds SAM `SEQ` strings from an indexed reference and a CIGAR.
 //!
 //! [`RefSeq`] owns the FASTA reader used for base fetching; contig metadata remains with the
-//! reference index. `gen_seq` first loads the reference span consumed by the CIGAR, then walks
-//! the complete operation vocabulary so query and reference consumption stay explicit.
+//! reference index. `gen_seq` loads each non-`Skip` reference segment consumed by the CIGAR, then
+//! walks the complete operation vocabulary so query and reference consumption stay explicit
+//! without reading skipped intron spans.
 //!
 //! Reference-backed operations copy or deliberately substitute bases according to their CIGAR
 //! kind and the supplied mismatch offsets. Insertions and soft clips are filled with random bases,
@@ -16,7 +17,7 @@ use noodles::core::{Position, Region};
 use noodles::fasta;
 use rand::{Rng, RngExt};
 
-use crate::cigar::{CigarKind, parse_ops, ref_len};
+use crate::cigar::{CigarKind, parse_ops};
 
 const BASES: [u8; 4] = *b"ACGT";
 
@@ -52,55 +53,79 @@ pub fn gen_seq<R: Rng + ?Sized>(
     mismatch_offsets: &[u64],
 ) -> io::Result<String> {
     let parsed = parse_ops(cigar);
-    let ref_bases = ref_seq.fetch(contig, pos, ref_len(&parsed))?;
     let mismatches: std::collections::HashSet<u64> = mismatch_offsets.iter().copied().collect();
 
     let mut seq = Vec::new();
-    let mut ref_pos: usize = 0;
+    let mut ref_cursor = pos;
     let mut query_pos: u64 = 0;
 
-    for op in &parsed {
-        let len = op.len() as u64;
-        match op.kind() {
-            CigarKind::Match => {
-                for _ in 0..len {
-                    let ref_base = ref_bases[ref_pos];
-                    ref_pos += 1;
-                    let base = if mismatches.contains(&query_pos) {
-                        mismatched_base(rng, ref_base)
-                    } else {
-                        ref_base
-                    };
-                    seq.push(base);
-                    query_pos += 1;
-                }
-            }
-            CigarKind::Insertion | CigarKind::SoftClip => {
-                for _ in 0..len {
-                    seq.push(BASES[rng.random_range(0..BASES.len())]);
-                    query_pos += 1;
-                }
-            }
-            CigarKind::Deletion | CigarKind::Skip => {
-                ref_pos += len as usize;
-            }
-            CigarKind::SequenceMatch => {
-                for _ in 0..len {
-                    seq.push(ref_bases[ref_pos]);
-                    ref_pos += 1;
-                    query_pos += 1;
-                }
-            }
-            CigarKind::SequenceMismatch => {
-                for _ in 0..len {
-                    let base = mismatched_base(rng, ref_bases[ref_pos]);
-                    seq.push(base);
-                    ref_pos += 1;
-                    query_pos += 1;
-                }
-            }
-            CigarKind::HardClip | CigarKind::Pad => {}
+    let ops = parsed.ops();
+    let mut i = 0;
+    while i < ops.len() {
+        if ops[i].kind() == CigarKind::Skip {
+            ref_cursor += ops[i].len() as u64;
+            i += 1;
+            continue;
         }
+        let seg_start = i;
+        let mut seg_ref_len = 0u64;
+        while i < ops.len() && ops[i].kind() != CigarKind::Skip {
+            if ops[i].kind().consumes_reference() {
+                seg_ref_len += ops[i].len() as u64;
+            }
+            i += 1;
+        }
+        let ref_bases = if seg_ref_len > 0 {
+            ref_seq.fetch(contig, ref_cursor, seg_ref_len)?
+        } else {
+            Vec::new()
+        };
+        let mut ref_pos: usize = 0;
+        for op in &ops[seg_start..i] {
+            let len = op.len() as u64;
+            match op.kind() {
+                CigarKind::Match => {
+                    for _ in 0..len {
+                        let ref_base = ref_bases[ref_pos];
+                        ref_pos += 1;
+                        let base = if mismatches.contains(&query_pos) {
+                            mismatched_base(rng, ref_base)
+                        } else {
+                            ref_base
+                        };
+                        seq.push(base);
+                        query_pos += 1;
+                    }
+                }
+                CigarKind::Insertion | CigarKind::SoftClip => {
+                    for _ in 0..len {
+                        seq.push(BASES[rng.random_range(0..BASES.len())]);
+                        query_pos += 1;
+                    }
+                }
+                CigarKind::Deletion => {
+                    ref_pos += len as usize;
+                }
+                CigarKind::SequenceMatch => {
+                    for _ in 0..len {
+                        seq.push(ref_bases[ref_pos]);
+                        ref_pos += 1;
+                        query_pos += 1;
+                    }
+                }
+                CigarKind::SequenceMismatch => {
+                    for _ in 0..len {
+                        let base = mismatched_base(rng, ref_bases[ref_pos]);
+                        seq.push(base);
+                        ref_pos += 1;
+                        query_pos += 1;
+                    }
+                }
+                CigarKind::HardClip | CigarKind::Pad => {}
+                CigarKind::Skip => unreachable!("Skip ops terminate each reference segment"),
+            }
+        }
+        ref_cursor += seg_ref_len;
     }
 
     Ok(String::from_utf8(seq).expect("bases must be valid UTF-8"))
@@ -155,6 +180,34 @@ mod tests {
         for &offset in &mismatch_offsets {
             let i = offset as usize;
             assert_ne!(seq.as_bytes()[i], ref_bases[i]);
+        }
+    }
+
+    #[test]
+    fn skip_reads_sequence_from_both_sides_and_applies_mismatches() {
+        let mut ref_seq = RefSeq::from_fa_path("testdata/reference/hs1_subset.fa").unwrap();
+        let mut rng = StdRng::seed_from_u64(9);
+
+        let left_ref = ref_seq.fetch("chrM", 100, 10).unwrap();
+        let right_ref = ref_seq.fetch("chrM", 140, 12).unwrap();
+        let mismatches = [2, 15];
+        let seq = gen_seq(&mut rng, &mut ref_seq, "chrM", 100, "10M30N12M", &mismatches).unwrap();
+        let bytes = seq.as_bytes();
+
+        assert_eq!(bytes.len(), 22);
+        for i in 0..10 {
+            if i == 2 {
+                assert_ne!(bytes[i], left_ref[i]);
+            } else {
+                assert_eq!(bytes[i], left_ref[i]);
+            }
+        }
+        for i in 0..12 {
+            if 10 + i == 15 {
+                assert_ne!(bytes[10 + i], right_ref[i]);
+            } else {
+                assert_eq!(bytes[10 + i], right_ref[i]);
+            }
         }
     }
 }

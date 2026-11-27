@@ -13,6 +13,7 @@
 # "fix" these by converting them to `examples/`.
 ex-tiny = "run -- testdata/reference/hs1_subset.fa testdata/bam/tiny.bam"
 ex-medium = "run -- testdata/reference/hs1_subset.fa testdata/bam/medium.bam"
+ex-medium-split = "run -- testdata/reference/hs1_subset.fa testdata/bam/medium_split30bp.bam"
 # GTF only: no `.fa` and no `.bam`, so the app opens on the bundled `hs1`
 # fallback reference with an empty pileup. Isolates the full-scale locus index
 # — `/` search over every RefSeq entry, and the features track — from anything

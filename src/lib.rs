@@ -66,6 +66,6 @@ pub use runtime::{
 };
 pub use spinner::{DRAW_ACTIVITY_WINDOW, LoopState};
 #[cfg(any(test, feature = "testgen"))]
-pub use testgen::{RefSeq, generate_sam_line, header_from_ref_index};
+pub use testgen::{RefSeq, SplitSpec, generate_sam_line, header_from_ref_index};
 #[cfg(feature = "profiling")]
 pub use viewer_app::genome::profile as profiling;

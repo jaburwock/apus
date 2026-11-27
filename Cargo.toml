@@ -63,6 +63,10 @@ name = "gen_medium_bam"
 required-features = ["testgen"]
 
 [[bin]]
+name = "gen_medium_split30bp_bam"
+required-features = ["testgen"]
+
+[[bin]]
 name = "prof_genome"
 required-features = ["profiling"]
 

@@ -59,6 +59,7 @@ fn main() {
             &mut ref_seq,
             read_len,
             Some(("chr1", pos_0based + 1)),
+            None,
         );
         let chr1_ref_id = ref_index
             .contig_names()

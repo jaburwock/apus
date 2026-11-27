@@ -16,6 +16,8 @@ optional downloads serve the full-scale examples and fixture regeneration.
 | `bam/tiny.bam.bai` | Its index. | Written by `gen_tiny_bam`. |
 | `bam/medium.bam` | Fifty longer synthetic reads for `ex-medium` and `ex-full`. | `cargo run --features testgen --bin gen_medium_bam`. |
 | `bam/medium.bam.bai` | Its index. | Written by `gen_medium_bam`. |
+| `bam/medium_split30bp.bam` | Fifty synthetic reads with a 30 bp split (`30N`) at `chr1:32` for `ex-medium-split`. | `cargo run --features testgen --bin gen_medium_split30bp_bam`. |
+| `bam/medium_split30bp.bam.bai` | Its index. | Written by `gen_medium_split30bp_bam`. |
 | `gtf/gtf_subset.gtf.gz` | Hand-edited RefSeq subset for the GTF and genome-viewer tests. Includes a malformed coordinate. | See [Rebuilding the GTF subset](#rebuilding-the-gtf-subset). |
 | `vcf/sample.vcf` | Hand-written shapes a VCF reader trips on. | Edit the plain VCF directly. |
 | `vcf/sample.vcf.gz` | BGZF copy, checked against the plain file. | `cargo run --bin gen_sample_vcf`. |

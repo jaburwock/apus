@@ -27,20 +27,35 @@ pub(crate) use qual::gen_qual;
 pub(crate) use rname::gen_rname;
 pub use seq::RefSeq;
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 use crate::refgenome::RefIndex;
 
 // The calibration sample is stratified at its modal mapping quality.
 const MAPQ: u8 = 60;
 
-/// Generates one SAM record, optionally at a fixed locus.
+/// Exact genomic split (`CigarKind::Skip` / `N`) offered to eligible generated reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitSpec<'a> {
+    pub contig: &'a str,
+    /// 1-based SAM coordinate of the first skipped reference base (matches `fixed_locus`).
+    pub start: u64,
+    /// Exact skipped reference length in bp; must be positive.
+    pub len: u64,
+}
+
+/// Generates one SAM record, optionally at a fixed locus and with an optional split site.
+///
+/// When `split` is supplied, reads on `split.contig` starting strictly before `split.start` with
+/// room on the contig roll 50/50 to incorporate `{split.len}N` at `split.start` and continue
+/// aligning on the downstream side. Reads starting inside or after the split stay unspliced.
 pub fn generate_sam_line<R: Rng + ?Sized>(
     rng: &mut R,
     ref_index: &RefIndex,
     ref_seq: &mut RefSeq,
     read_len: u64,
     fixed_locus: Option<(&str, u64)>,
+    split: Option<SplitSpec<'_>>,
 ) -> String {
     let qname = gen_qname();
     let flag = gen_flag(rng);
@@ -53,7 +68,31 @@ pub fn generate_sam_line<R: Rng + ?Sized>(
         }
     };
 
-    let (cigar, mismatch_offsets) = gen_cigar(rng, read_len);
+    let cigar_split = match split {
+        Some(spec) => {
+            assert!(spec.len > 0, "split length must be positive");
+            let contig_len = ref_index
+                .length(spec.contig)
+                .unwrap_or_else(|| panic!("unknown split contig: {}", spec.contig))
+                .as_u64();
+            assert!(
+                spec.start >= 1 && spec.start.saturating_add(spec.len) - 1 <= contig_len,
+                "split {}:{}+{} exceeds contig length {contig_len}",
+                spec.contig,
+                spec.start,
+                spec.len
+            );
+            let fits_contig = pos.saturating_add(read_len).saturating_add(spec.len).saturating_sub(1) <= contig_len;
+            if rname == spec.contig && pos < spec.start && fits_contig && rng.random_bool(0.5) {
+                Some((spec.start - pos, spec.len))
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+
+    let (cigar, mismatch_offsets) = gen_cigar(rng, read_len, cigar_split);
     let xn = if mismatch_offsets.is_empty() {
         "NA".to_string()
     } else {
@@ -150,7 +189,7 @@ mod tests {
         let mut ref_seq = RefSeq::from_fa_path("testdata/reference/hs1_subset.fa").unwrap();
         let mut rng = StdRng::seed_from_u64(42);
         for (read_len, fixed_locus) in [(128, None), (512, Some(("chrM", 100)))] {
-            let line = generate_sam_line(&mut rng, &ref_index, &mut ref_seq, read_len, fixed_locus);
+            let line = generate_sam_line(&mut rng, &ref_index, &mut ref_seq, read_len, fixed_locus, None);
             let fields: Vec<&str> = line.split('\t').collect();
             assert_eq!(fields.len(), 12);
             let contig_len = ref_index.length(fields[2]).expect("RNAME must be indexed").as_u64();
@@ -170,6 +209,66 @@ mod tests {
     }
 
     #[test]
+    fn split_generation_produces_both_spliced_and_unspliced_reads_at_exact_locus() {
+        use crate::cigar::{CigarKind, parse_ops};
+
+        let ref_index = RefIndex::from_fai_path("testdata/reference/hs1_subset.fa.fai").unwrap();
+        let mut ref_seq = RefSeq::from_fa_path("testdata/reference/hs1_subset.fa").unwrap();
+        let mut rng = StdRng::seed_from_u64(19);
+        let split = SplitSpec {
+            contig: "chr1",
+            start: 32,
+            len: 30,
+        };
+
+        let mut spliced = 0usize;
+        let mut unspliced = 0usize;
+        for pos in 1..=51 {
+            let read_len = 100;
+            let line = generate_sam_line(
+                &mut rng,
+                &ref_index,
+                &mut ref_seq,
+                read_len,
+                Some(("chr1", pos)),
+                Some(split),
+            );
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(fields[9].len(), read_len as usize);
+            assert_eq!(fields[10].len(), read_len as usize);
+
+            let parsed = parse_ops(fields[5]);
+            let mut ref_cursor = pos;
+            let mut skips = Vec::new();
+            for op in &parsed {
+                let len = op.len() as u64;
+                if op.kind() == CigarKind::Skip {
+                    skips.push((ref_cursor, len));
+                }
+                if op.kind().consumes_reference() {
+                    ref_cursor += len;
+                }
+            }
+
+            if pos >= split.start {
+                assert!(
+                    skips.is_empty(),
+                    "read starting at {pos} inside/after split must stay unspliced"
+                );
+            } else if skips.is_empty() {
+                unspliced += 1;
+            } else {
+                assert_eq!(skips, vec![(split.start, split.len)]);
+                spliced += 1;
+            }
+        }
+        assert!(
+            spliced > 0 && unspliced > 0,
+            "expected mix of spliced ({spliced}) and unspliced ({unspliced})"
+        );
+    }
+
+    #[test]
     fn round_trips_generated_reads_through_a_bam_file() {
         let ref_index = RefIndex::from_fai_path("testdata/reference/hs1_subset.fa.fai").unwrap();
         let mut ref_seq = RefSeq::from_fa_path("testdata/reference/hs1_subset.fa").unwrap();
@@ -179,8 +278,27 @@ mod tests {
 
         let mut sam_lines = Vec::new();
         for read_len in [128, 512, 1_024] {
-            sam_lines.push(generate_sam_line(&mut rng, &ref_index, &mut ref_seq, read_len, None));
+            sam_lines.push(generate_sam_line(
+                &mut rng,
+                &ref_index,
+                &mut ref_seq,
+                read_len,
+                None,
+                None,
+            ));
         }
+        sam_lines.push(generate_sam_line(
+            &mut rng,
+            &ref_index,
+            &mut ref_seq,
+            100,
+            Some(("chr1", 10)),
+            Some(SplitSpec {
+                contig: "chr1",
+                start: 32,
+                len: 30,
+            }),
+        ));
 
         let sam_text = sam_lines.join("\n");
         let mut sam_reader = noodles::sam::io::Reader::new(sam_text.as_bytes());
