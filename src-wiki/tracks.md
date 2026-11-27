@@ -65,3 +65,7 @@ design. This page holds the rules that span files or tracks.
   BAM query window. Each window returns only its own depth, spanning reads, and cluster medians.
 - **Pileup lanes use a fixed tile grid.** BAM fetch windows vary with read span. Reads can cross
   both grids and must keep one lane as they pass between tiles and cache windows.
+
+## Active plans
+
+- [Mid-vertical split-read layout and Braille connectors](plan-split-mid-vertical.md)
