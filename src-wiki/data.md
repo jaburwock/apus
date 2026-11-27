@@ -21,7 +21,7 @@ The [manifest](../testdata/README.md) lists every fixture and how to rebuild it.
 
 - **Test BAMs are synthetic.** `src/testgen/` uses [aggregate HG002 calibration counts](../testdata/README.md#calibrating-the-synthetic-bam-generators)
   and synthesizes reads against the fixture reference. The HG002 rendering examples use the public
-  ONT subset under its dataset license.
+  ONT subset under its dataset license. Active plan: [split-read generation](plan-split-generation.md).
 - **Each VCF fixture has one job; don't merge them.** `sample.vcf` holds the shapes a parser trips
   on, including the never-carried `UNUSED` key that the header-driven column test depends on.
   `raw_info.vcf` declares no `##INFO`, for the raw-blob fallback. `clinvar_subset.vcf.gz` is real
