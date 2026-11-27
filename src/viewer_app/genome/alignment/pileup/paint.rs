@@ -76,6 +76,8 @@ pub(super) struct LaneGlyphs {
     pub(super) digits: bool,
     /// Direction arrows.
     pub(super) arrows: bool,
+    /// Reference-skip (`N`) connectors, which survive 2bp columns like arrows but not 2-lane rows.
+    pub(super) skips: bool,
     /// Whether large insertions expand into synthetic sub-lanes (switches parent `'I'` to `'▼'`).
     pub(super) expand_insertions: bool,
 }
@@ -83,15 +85,16 @@ pub(super) struct LaneGlyphs {
 impl LaneGlyphs {
     /// Derives the mark flags from the settings and the current packing.
     ///
-    /// `arrows` deliberately does not share `letters`' condition: an arrow survives the 2bp columns
-    /// of `Mid` horizontal zoom, but not two lanes to a row. The glyph plane is cell-strided, so at
-    /// two lanes per row both lanes share one glyph slot and an arrow could not be attributed to
-    /// one read.
+    /// `arrows` and `skips` deliberately do not share `letters`' condition: cell-wide marks survive
+    /// the 2bp columns of `Mid` horizontal zoom, but not two lanes to a row. The glyph plane is
+    /// cell-strided, so at two lanes per row both lanes share one glyph slot and a mark could not
+    /// be attributed to one read.
     pub(super) fn new(settings: &GenomeViewerSettings, lanes_per_row: usize, bp_per_column: u64) -> Self {
         Self {
             letters: lanes_per_row == 1 && bp_per_column == 1,
             digits: settings.readbasedigits,
             arrows: settings.readarrows && lanes_per_row == 1,
+            skips: lanes_per_row == 1,
             expand_insertions: settings.expandinsertions,
         }
     }
@@ -166,15 +169,20 @@ pub(super) fn paint_one_lane_against(
             ReadColor::Direction => Alignment::read_strand_color_pair(read.strand.is_reverse(), lane_idx),
         };
 
+        // Classify first so skipped (`N`) bases leave the plain track background and centline
+        // untouched rather than painting filled read pixels underneath the `-` connector.
+        coverage.classify_read_against(read, content_columns, reference.reborrow());
+
         for x in start_x..end_x {
             let bp = left + BasePair(x as u64);
+            if coverage.kind_at_bp(bp) == BaseKind::Skip {
+                continue;
+            }
             fb.set_pixel(x, lane_y, pair.pick(base_parity_tinted(bp)));
             // Blanks the centline rule under a read: a covered base is marked by the highlight
             // instead, and the rule survives only in the gaps between reads.
             fb.clear_glyph(x, lane_y);
         }
-
-        coverage.classify_read_against(read, content_columns, reference.reborrow());
     }
 
     // Arrows sit here, after the background loop that clears glyphs and before every CIGAR layer
@@ -247,6 +255,37 @@ pub(super) fn paint_one_lane_against(
         }
     }
 
+    if glyphs.skips {
+        let scale = bp_per_column as usize;
+        let first_col = covered_bp.start / scale;
+        let past_last_col = covered_bp.end.div_ceil(scale);
+        let centline_col = centline_x.map(|cx| cx / scale);
+        let clip_bp = bounds_bp.min(bp_width);
+        for col in first_col..past_last_col {
+            // Leave the centline column untouched so the vertical rule (or half-block at Mid)
+            // stays visible across the skip.
+            if centline_col == Some(col) {
+                continue;
+            }
+            let col_x = col * scale;
+            let col_end = (col_x + scale).min(clip_bp);
+            if col_end - col_x == scale
+                && (col_x..col_end).all(|x| coverage.kind_at_bp(left + BasePair(x as u64)) == BaseKind::Skip)
+            {
+                fb.set_glyph(
+                    col_x,
+                    lane_y,
+                    Glyph {
+                        ch: '-',
+                        fg: Text::DIMMED_FG(),
+                        bg: None,
+                        bold: false,
+                    },
+                );
+            }
+        }
+    }
+
     if glyphs.letters {
         for x in covered_bp {
             let bp = left + BasePair(x as u64);
@@ -316,7 +355,7 @@ pub(super) fn paint_one_lane_against(
                         },
                     );
                 }
-                BaseKind::Uncovered => {}
+                BaseKind::Skip | BaseKind::Uncovered => {}
             }
         }
     }

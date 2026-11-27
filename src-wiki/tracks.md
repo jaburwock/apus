@@ -58,7 +58,8 @@ design. This page holds the rules that span files or tracks.
 - **Depth comes from the alignment fetch.** A BAM window's coverage is computed with its reads
   (`alignment/window_counts.rs`), so a source cannot return reads it hasn't counted. Depth sums
   the allele counts, including deletions and unknown bases. CIGAR reference skips contribute no
-  depth even though the pileup paints them like deletions. The coverage track and depth readouts
+  depth and render as `-` connectors on the plain track background at single-lane zoom rather than
+  filled read bases. The coverage track and depth readouts
   read it through `AlignmentTrack::coverage_at`, which never fetches, after `AlignmentTrack::draw`
   has requested the windows. Insertion clustering uses five extra bases on either side of the
   BAM query window. Each window returns only its own depth, spanning reads, and cluster medians.

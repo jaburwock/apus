@@ -36,6 +36,7 @@ pub(super) enum BaseKind {
     Match,
     Mismatch,
     Deletion,
+    Skip,
     InsertionFlank,
 }
 
@@ -275,7 +276,12 @@ impl LaneCoverage {
                     if vis_start < vis_end {
                         let s = (vis_start - view_start).as_u64() as usize;
                         let e = (vis_end - view_start).as_u64() as usize;
-                        self.kinds[s..e].fill(BaseKind::Deletion);
+                        let base_kind = if kind == CigarKind::Skip {
+                            BaseKind::Skip
+                        } else {
+                            BaseKind::Deletion
+                        };
+                        self.kinds[s..e].fill(base_kind);
                         self.indel_sizes[s..e].fill(Some(BasePair::length(len)));
                     }
                     ref_cursor = op_end;
@@ -422,18 +428,15 @@ mod tests {
             for (read, skip) in reads.iter().zip(&skips) {
                 lane.reset(width, left, 1);
                 lane.classify_read_against(read, width, ReferenceLookup::new(&mut reference, &contig));
-                // The pileup represents both D and N as deletions. Remove the fixture's N span
-                // before comparing alleles, since reference skips do not contribute any depth.
+                // Reference skips classify as `BaseKind::Skip` and do not contribute any depth.
                 span_depth += (right.min(read.start + read.length) - left.max(read.start)).as_u64()
                     - (right.min(skip.end) - left.max(skip.start)).as_u64();
                 for (i, bp) in left.step_to(right, BasePair(1)).enumerate() {
-                    if skip.contains(&bp) {
-                        continue;
-                    }
                     let kind = lane.kind_at_bp(bp);
+                    assert_eq!(kind == BaseKind::Skip, skip.contains(&bp), "bp {bp:?}");
                     saw_mismatch |= kind == BaseKind::Mismatch;
                     let allele = match kind {
-                        BaseKind::Uncovered => continue,
+                        BaseKind::Uncovered | BaseKind::Skip => continue,
                         BaseKind::Deletion => 5,
                         BaseKind::Match | BaseKind::Mismatch | BaseKind::InsertionFlank => b"ACGT"
                             .iter()
@@ -742,20 +745,20 @@ mod tests {
 
     #[test]
     fn indel_sizes_match_each_operation_and_its_affected_reference_positions() {
-        let mut coverage = LaneCoverage::for_paint(200, BasePair(0), 1, false);
+        let mut coverage = LaneCoverage::for_paint(210, BasePair(0), 1, false);
         let mut sequence = vec![b'A'; 17];
         sequence[0] = b'C';
-        let read = read_cigar(0, "5M2I5M3D150D5M", Some(sequence));
+        let read = read_cigar(0, "5M2I5M3D150D30N5M", Some(sequence));
         let mut reference = ReferenceData::new(&IndexedFasta::hs1_fallback(), ReferenceWorkerHandle::spawn());
-        reference.seed_chunk("chr1", BasePair(0), &[b'A'; 200]);
-        coverage.classify_read_against(&read, 200, ReferenceLookup::new(&mut reference, &contig(BasePair(200))));
+        reference.seed_chunk("chr1", BasePair(0), &[b'A'; 210]);
+        coverage.classify_read_against(&read, 210, ReferenceLookup::new(&mut reference, &contig(BasePair(210))));
 
         for (bp, size) in [
             (0, None),
             (4, Some(BasePair::length(2))),
             (5, Some(BasePair::length(2))),
             (9, None),
-            (163, None),
+            (193, None),
             (200, None),
         ] {
             assert_eq!(coverage.indel_size_at_bp(BasePair(bp)), size, "bp {bp}");
@@ -767,6 +770,14 @@ mod tests {
             assert_eq!(
                 coverage.indel_size_at_bp(BasePair(bp)),
                 Some(BasePair::length(150)),
+                "bp {bp}"
+            );
+        }
+        for bp in 163..193 {
+            assert_eq!(coverage.kind_at_bp(BasePair(bp)), BaseKind::Skip, "bp {bp}");
+            assert_eq!(
+                coverage.indel_size_at_bp(BasePair(bp)),
+                Some(BasePair::length(30)),
                 "bp {bp}"
             );
         }

@@ -159,11 +159,12 @@ fn build_visible_lanes<'a>(
     visible
 }
 
-/// An indel intersected by the centreline and its full operation length.
+/// An indel or reference skip intersected by the centreline and its full operation length.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum IndelLabel {
     Insertion(BasePair),
     Deletion(BasePair),
+    Skip(BasePair),
 }
 
 /// Framebuffer dimensions for one pileup frame.
@@ -324,6 +325,7 @@ pub(super) fn draw_reads_against(
                             match coverage.kind_at_bp(centre_bp) {
                                 BaseKind::InsertionFlank => Some(IndelLabel::Insertion(size)),
                                 BaseKind::Deletion => Some(IndelLabel::Deletion(size)),
+                                BaseKind::Skip => Some(IndelLabel::Skip(size)),
                                 _ => None,
                             }
                         });
@@ -1884,6 +1886,18 @@ mod tests {
                 Some(19),
                 Some(IndelLabel::Deletion(BasePair::length(4))),
             ),
+            (
+                "10M30N5M",
+                None,
+                0,
+                20,
+                1,
+                1,
+                Some(45),
+                Some(IndelLabel::Skip(BasePair::length(30))),
+            ),
+            ("10M30N5M", None, 0, 20, 2, 1, None, None),
+            ("10M30N5M", None, 0, 20, 1, 2, None, None),
             ("10M4D5M", None, 0, 4, 1, 1, Some(19), None),
             ("10M4D5M", None, 0, 30, 1, 1, None, None),
             (
@@ -1918,6 +1932,142 @@ mod tests {
                 (length.map(BasePair::length), indel),
                 "CIGAR {cigar}, centre {centre}, zoom {bp_per_column}, lanes {lanes_per_row}"
             );
+        }
+    }
+
+    #[test]
+    fn split_reads_render_skip_connectors_on_track_bg_and_centreline_label_across_zooms() {
+        let _palette = lock_for_test();
+        let mut cache = test_cache(4, BasePair(1_000));
+        // Odd exon boundaries (bp 5..15) exercise both half-block exon edges at Mid zoom.
+        let split = read_cigar(0, "5M10N5M", Some(vec![b'A'; 10]));
+        // Start `sibling` 1 bp right so lane packing deterministically places `split` in lane 0.
+        let sibling = Read {
+            id: id("sibling"),
+            ..read_cigar(1, "19M", None)
+        };
+        cache.insert_reads("chr1".to_string(), BasePair(0), vec![split, sibling]);
+
+        let area = Rect::new(0, 0, 20, 2);
+        let track_bg = Surface::TRACK_BG();
+        let lane0 = Alignment::pileup_lane_color_pair(0);
+        let lane1 = Alignment::pileup_lane_color_pair(1);
+
+        // 1. (Close, Close): hyphens on plain track bg, centline rule preserved, and `_10bp` label.
+        {
+            let mut settings = settings(1);
+            settings.centline = true;
+            settings.readarrows = true;
+            settings.readbasedigits = true;
+            settings.indellength = true;
+            let position = view(BasePair(0), BasePair(0), area.width, 1);
+            let dimensions = pileup_dimensions(area, position.underflow, 1, 1);
+            let mut fb = Framebuffer::new(dimensions.bp_width, dimensions.fb_height, 1, 1);
+            let mut reference = seeded_reference();
+            let result = draw_reads_against(
+                &mut fb,
+                dimensions,
+                area,
+                position,
+                &contig(FAR),
+                vertical(1),
+                &mut cache,
+                &mut UnreachableSource,
+                &settings,
+                &mut reference,
+            );
+            let cells = fb.reduce(1, 1, track_bg);
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    super::super::write_cells(
+                        frame.buffer_mut(),
+                        &cells,
+                        area,
+                        dimensions.origin_x,
+                        dimensions.content_width,
+                        area.height as usize,
+                        dimensions.content_width as usize,
+                    );
+                    super::super::draw_indel_length_labels(
+                        frame,
+                        area,
+                        result.centline_col.unwrap(),
+                        &result.centreline_indels,
+                    );
+                })
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let cent_col = result.centline_col.unwrap();
+            assert_eq!(cent_col, 10, "centreline lands inside the 5..15 skip");
+            for col in 5..15u16 {
+                let cell = buf.get(col, 0);
+                assert_ne!(cell.fg, Indel::DELETION());
+                assert_ne!(cell.bg, Indel::DELETION());
+                if col == cent_col {
+                    assert_eq!(cell.symbol(), crate::viewer_app::painter::VERTICAL_RULE.to_string());
+                    assert_eq!(cell.bg, track_bg);
+                } else if (cent_col + 1..cent_col + 6).contains(&col) {
+                    continue;
+                } else {
+                    assert_eq!(cell.symbol(), "-", "col {col}");
+                    assert_eq!(cell.bg, track_bg, "col {col}");
+                }
+            }
+            let label: String = (cent_col + 1..cent_col + 6).map(|x| buf.get(x, 0).symbol()).collect();
+            assert_eq!(label, "_10bp");
+            // Col 15 holds the final `'p'` of `_10bp`, so check exon bases outside the label.
+            for col in [0u16, 4, 16, 19] {
+                assert_eq!(buf.get(col, 0).bg, lane0.pick(col % 2 == 1), "exon col {col}");
+            }
+        }
+
+        // 2. (Mid, Close): half-block exon boundaries preserved and full-skip 2bp columns draw `-`.
+        {
+            let mut settings = settings(2);
+            settings.centline = false;
+            settings.readarrows = true;
+            let mut reference = seeded_reference();
+            let buf = draw_to_buffer_against(
+                &mut cache,
+                &mut UnreachableSource,
+                area,
+                view(BasePair(0), BasePair(0), area.width, 2),
+                &contig(FAR),
+                vertical(1),
+                &settings,
+                &mut reference,
+            );
+            // Col 2 covers bp 4 (exon) + bp 5 (skip); col 7 covers bp 14 (skip) + bp 15 (exon).
+            assert_eq!((buf.get(2, 0).fg, buf.get(2, 0).bg), (lane0.pick(false), track_bg));
+            assert_eq!((buf.get(7, 0).fg, buf.get(7, 0).bg), (track_bg, lane0.pick(true)));
+            for col in 3..7u16 {
+                let cell = buf.get(col, 0);
+                assert_eq!(cell.symbol(), "-", "mid-zoom full-skip col {col}");
+                assert_eq!(cell.bg, track_bg, "mid-zoom full-skip col {col}");
+            }
+        }
+
+        // 3. (Close, Mid): top lane skip stays plain track bg without clobbering the sibling lane.
+        {
+            let mut settings = settings(1);
+            settings.centline = false;
+            let mut reference = seeded_reference();
+            let buf = draw_to_buffer_against(
+                &mut cache,
+                &mut UnreachableSource,
+                area,
+                view(BasePair(0), BasePair(0), area.width, 1),
+                &contig(FAR),
+                vertical(2),
+                &settings,
+                &mut reference,
+            );
+            for col in 5..15u16 {
+                let cell = buf.get(col, 0);
+                assert_eq!(cell.fg, track_bg, "top lane skip at col {col}");
+                assert_eq!(cell.bg, lane1.pick(col % 2 == 1), "bottom sibling intact at col {col}");
+            }
         }
     }
 
